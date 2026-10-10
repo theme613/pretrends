@@ -235,28 +235,20 @@ async function fetchBlob(pathname: string): Promise<string | null> {
   try {
     const { list } = await import("@vercel/blob");
     const { blobs } = await list({ prefix: pathname });
-    const match = blobs.find((b) => b.pathname === pathname);
+    if (!blobs.length) return null;
+    const sorted = blobs.sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
+    const match = sorted.find((b) => b.pathname === pathname || b.pathname.endsWith(pathname)) || sorted[0];
     if (!match) return null;
     const res = await fetch(match.url, { cache: "no-store" });
     if (!res.ok) return null;
     return await res.text();
-  } catch {
+  } catch (error) {
+    console.error("fetchBlob error:", error);
     return null;
   }
 }
 
 async function indexedCandidates(): Promise<TrendCandidate[]> {
-  const signature = await historySignature();
-  if (writableDirectory !== directory) {
-    try {
-      const index = JSON.parse(await fs.readFile(writableIndexFile, "utf8"));
-      if (index.version === 1 && (!signature || index.signature === signature) && Array.isArray(index.candidates) &&
-          index.candidates.every((post: TrendCandidate) => post && typeof post.id === "string" && typeof post.platform === "string"))
-        return index.candidates;
-    } catch {
-      /* ignore */
-    }
-  }
   if (process.env.BLOB_READ_WRITE_TOKEN) {
     try {
       const blobText = await fetchBlob("scans/collection-index.json");
@@ -269,6 +261,18 @@ async function indexedCandidates(): Promise<TrendCandidate[]> {
           return index.candidates;
         }
       }
+    } catch {
+      /* ignore */
+    }
+  }
+  const signature = await historySignature();
+  if (writableDirectory !== directory) {
+    try {
+      const index = JSON.parse(await fs.readFile(writableIndexFile, "utf8"));
+      if (index.version === 1 && Array.isArray(index.candidates) &&
+          index.candidates.every((post: TrendCandidate) => post && typeof post.id === "string" && typeof post.platform === "string") &&
+          index.candidates.length > 0)
+        return index.candidates;
     } catch {
       /* ignore */
     }
