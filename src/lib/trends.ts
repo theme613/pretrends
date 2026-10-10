@@ -17,6 +17,7 @@ export type Trend = {
   steps: string[];
   collectedAt: string | null;
   baselineAt: string | null;
+  publishedAt?: string | null;
   aiStatus: string;
   after: number | null;
   hasBaseline: boolean;
@@ -30,6 +31,10 @@ export type Trend = {
   sourceVerifiedAt: string;
   categoryEvidence: CategoryEvidence[];
   currentViews: number;
+  snapshots?: Array<{ views: number; timestamp: string }>;
+  hourlyGrowthRate?: number | null;
+  hoursBetween?: number | null;
+  snapshotCount: number;
 };
 export const categories = [
   {
@@ -93,40 +98,63 @@ export function normalizeTrends(data: unknown, now = Date.now()): Trend[] {
   return data.flatMap((item): Trend[] => {
     if (!item || typeof item !== "object" || typeof item.title !== "string")
       return [];
-    if (!isEligiblePost(item as TrendCandidate, now)) return [];
-    const forecast = calculateForecast(item as TrendCandidate);
-    const id = `${item.platform}:${item.id}`;
-    const rawScore = Number(item.breakout_score ?? item.score ?? 0);
-    const url =
-      typeof item.url === "string" && /^https?:\/\//i.test(item.url)
-        ? item.url
-        : null;
+    const candidate = item as TrendCandidate;
+    if (!isEligiblePost(candidate, now)) return [];
     const hasBaseline =
-      item.has_baseline !== undefined
-        ? item.has_baseline === true
-        : Boolean(item.baseline_at);
+      candidate.has_baseline !== undefined
+        ? candidate.has_baseline === true
+        : Boolean(candidate.baseline_at);
+    const forecast = !hasBaseline
+      ? calculateForecast({ ...candidate, has_baseline: false })
+      : (candidate.forecast ?? calculateForecast(candidate));
+    const snapshots = Array.isArray(candidate.snapshots) ? candidate.snapshots : [];
+    const hoursBetween =
+      candidate.hours_between ??
+      (candidate.baseline_at && candidate.collected_at
+        ? (Date.parse(candidate.collected_at) -
+            Date.parse(candidate.baseline_at)) /
+          3600000
+        : null);
+    const hourlyGrowthRate =
+      candidate.hourly_growth_rate ?? forecast.views_per_hour ?? null;
+    const prediction = predictionDisplay(
+      candidate.views_t1,
+      forecast,
+      hoursBetween,
+    );
+    const id = `${candidate.platform}:${candidate.id}`;
+    const rawScore = Number((candidate as { breakout_score?: number }).breakout_score ?? candidate.score ?? 0);
+    const url =
+      typeof candidate.url === "string" && /^https?:\/\//i.test(candidate.url)
+        ? candidate.url
+        : null;
     return [
       {
         id,
-        title: cleanText(item.title),
-        creator: cleanText(String(item.creator ?? "Unknown creator")),
-        platform: String(item.platform ?? "Web"),
-        categories: Array.isArray(item.categories)
-          ? item.categories.filter(
+        title: cleanText(candidate.title),
+        creator: cleanText(String(candidate.creator ?? "Unknown creator")),
+        platform: String(candidate.platform ?? "Web"),
+        categories: Array.isArray(candidate.categories)
+          ? candidate.categories.filter(
               (c: unknown): c is string => typeof c === "string",
             )
           : [],
         before:
-          item.views_t0 == null
-            ? Math.max(0, Number(item.views_t1) || 0)
-            : Math.max(0, Number(item.views_t0) || 0),
-        previewUrl: typeof item.preview_key === "string" && /^[a-f0-9]{64}$/.test(item.preview_key) ? `/api/previews?key=${item.preview_key}` : undefined,
+          candidate.views_t0 == null
+            ? Math.max(0, Number(candidate.views_t1) || 0)
+            : Math.max(0, Number(candidate.views_t0) || 0),
+        previewUrl:
+          typeof candidate.preview_key === "string" &&
+          /^[a-f0-9]{64}$/.test(candidate.preview_key)
+            ? `/api/previews?key=${candidate.preview_key}`
+            : undefined,
         image:
-          typeof item.image === "string" && /^https:\/\//.test(item.image)
-            ? item.image
+          typeof candidate.image === "string" &&
+          /^https:\/\//.test(candidate.image)
+            ? candidate.image
             : null,
-        steps: Array.isArray(item.steps)
-          ? item.steps
+        steps: Array.isArray(candidate.steps)
+          ? candidate.steps
               .filter(
                 (step: unknown): step is string => typeof step === "string",
               )
@@ -134,11 +162,19 @@ export function normalizeTrends(data: unknown, now = Date.now()): Trend[] {
               .map(cleanText)
           : [],
         collectedAt:
-          typeof item.collected_at === "string" ? item.collected_at : null,
+          typeof candidate.collected_at === "string"
+            ? candidate.collected_at
+            : null,
         baselineAt:
-          typeof item.baseline_at === "string" ? item.baseline_at : null,
-        aiStatus: String(item.ai_status ?? "unavailable"),
-        after: hasBaseline ? Math.max(0, Number(item.views_t1) || 0) : null,
+          typeof candidate.baseline_at === "string"
+            ? candidate.baseline_at
+            : null,
+        publishedAt:
+          typeof candidate.published_at === "string"
+            ? candidate.published_at
+            : null,
+        aiStatus: String(candidate.ai_status ?? "unavailable"),
+        after: hasBaseline ? Math.max(0, Number(candidate.views_t1) || 0) : null,
         hasBaseline,
         score: Number.isFinite(rawScore)
           ? Math.round(
@@ -150,22 +186,31 @@ export function normalizeTrends(data: unknown, now = Date.now()): Trend[] {
           : 0,
         reason: cleanText(
           String(
-            item.reason ?? "Check the view counts to understand this signal.",
+            candidate.reason ?? "Check the view counts to understand this signal.",
           ),
         ),
         decision: cleanText(
           String(
-            item.decision ??
+            candidate.decision ??
               "Start with one small post that fits your customers.",
           ),
         ),
         url,
-        predictedViews: forecast.estimated_total,
+        predictedViews: prediction.estimated_total,
         forecast,
-        prediction: predictionDisplay(item.views_t1, forecast),
-        sourceVerifiedAt: String(item.source_verified_at),
-        categoryEvidence: item.category_evidence,
-        currentViews: item.views_t1,
+        prediction,
+        sourceVerifiedAt: String(candidate.source_verified_at),
+        categoryEvidence: candidate.category_evidence || [],
+        currentViews: candidate.views_t1,
+        snapshots,
+        hourlyGrowthRate,
+        hoursBetween,
+        snapshotCount:
+          snapshots.length > 0
+            ? snapshots.length
+            : hasBaseline
+              ? 2
+              : 1,
       },
     ];
   });
@@ -267,4 +312,236 @@ export function starterIdea(trend: Trend, business: string) {
       ],
     }
   );
+}
+
+export function cleanTrendMatterReason(
+  reason: string,
+  categoryEvidence?: CategoryEvidence[],
+): string {
+  if (!reason || typeof reason !== "string") {
+    return (
+      categoryEvidence?.[0]?.description ||
+      "Positive visual engagement verified."
+    );
+  }
+
+  const sentences = reason
+    .split(/(?<=\.)\s+/)
+    .map((s) => s.trim())
+    .filter((s) => {
+      if (!s) return false;
+      if (
+        /\bno\s+(other\s+)?(activities|actions|cooking|music|food|fashion|tech|dance|sports|crypto|meme|game|car|repairs|hands-on|instruments?)[^.]*?(visible|occur|seen|demonstration|found|present)\b/i.test(
+          s,
+        )
+      ) {
+        return false;
+      }
+      if (/\bno\s+instrument\s+playing\b/i.test(s)) return false;
+      if (/\bthis\s+post\s+has\s+not\s+passed\b/i.test(s)) return false;
+      if (/\bno\s+activity\s+could\s+be\b/i.test(s)) return false;
+      return true;
+    });
+
+  const cleaned = sentences.join(" ").trim();
+  if (cleaned.length > 15) return cleaned;
+
+  if (categoryEvidence?.[0]?.description) {
+    return categoryEvidence[0].description;
+  }
+  return reason;
+}
+
+export type GrowthReason = {
+  id: string;
+  title: string;
+  detail: string;
+  strength: number;
+};
+
+export function trendGrowthReasons(
+  trend: Trend,
+  allTrends: Trend[] = [],
+): GrowthReason[] {
+  const fired: GrowthReason[] = [];
+  const current = trend.currentViews;
+  const mainCategory = topic(trend).label;
+
+  const hasHistory =
+    trend.prediction.method === "observed_growth" &&
+    trend.prediction.estimated_total !== null &&
+    trend.before !== null &&
+    trend.hoursBetween !== null &&
+    trend.hoursBetween !== undefined &&
+    trend.hoursBetween > 0;
+
+  // Signal 1: Velocity spike
+  if (hasHistory) {
+    const diff = trend.currentViews - (trend.before ?? trend.currentViews);
+    const hours = Math.max(1, Math.round(trend.hoursBetween!));
+    const rate = trend.prediction.hourly_rate ?? (diff / hours);
+    const pct =
+      trend.before && trend.before > 0
+        ? Math.round((diff / trend.before) * 100)
+        : 0;
+
+    if (diff > 0 || rate > 0) {
+      fired.push({
+        id: "velocity_spike",
+        title: "Velocity spike",
+        detail: `+${formatCount(diff)} views (+${pct}%) in the last ${hours}h (+${formatCount(Math.round(rate))}/hr pace)`,
+        strength: Math.abs(pct) * 2 + Math.log10(Math.max(1, rate)) * 10,
+      });
+    }
+  } else if (trend.publishedAt && trend.collectedAt) {
+    const pubHours = Math.max(
+      1,
+      (Date.parse(trend.collectedAt) - Date.parse(trend.publishedAt)) / 3600000,
+    );
+    const hourly = current / pubHours;
+    if (pubHours > 0 && current > 0) {
+      const timeLabel =
+        pubHours <= 48
+          ? `${Math.round(pubHours)}h`
+          : `${Math.round(pubHours / 24)} days`;
+      fired.push({
+        id: "velocity_spike",
+        title: "Velocity spike",
+        detail: `+${formatCount(current)} views generated in ${timeLabel} since publishing (+${formatCount(Math.round(hourly))}/hr pace)`,
+        strength: Math.log10(Math.max(1, hourly)) * 12,
+      });
+    }
+  }
+
+  // Signal 2: Accelerating vs Decelerating growth
+  if (hasHistory && trend.publishedAt && trend.baselineAt) {
+    const pubToBaselineHours = Math.max(
+      1,
+      (Date.parse(trend.baselineAt) - Date.parse(trend.publishedAt)) / 3600000,
+    );
+    const initialRate = (trend.before ?? 0) / pubToBaselineHours;
+    const recentRate = trend.prediction.hourly_rate ?? 0;
+
+    if (initialRate > 0) {
+      const paceChangePct = Math.round(
+        ((recentRate - initialRate) / initialRate) * 100,
+      );
+      if (paceChangePct >= 15) {
+        fired.push({
+          id: "accelerating_growth",
+          title: "Accelerating growth",
+          detail: `Growth velocity accelerated from ${formatCount(Math.round(initialRate))}/hr to ${formatCount(Math.round(recentRate))}/hr (+${paceChangePct}% pace increase)`,
+          strength: paceChangePct * 1.8,
+        });
+      } else if (paceChangePct <= -15 && recentRate >= 0) {
+        fired.push({
+          id: "decelerating_growth",
+          title: "Decelerating growth",
+          detail: `Growth velocity moderated from ${formatCount(Math.round(initialRate))}/hr to ${formatCount(Math.round(recentRate))}/hr (${paceChangePct}% pace change)`,
+          strength: Math.abs(paceChangePct) * 1.2,
+        });
+      }
+    }
+  }
+
+  // Signal 3: Engagement / performance above category median
+  const peers = allTrends.filter((t) =>
+    t && Array.isArray(t.categories) && matchesCategory(t, topic(trend).id),
+  );
+  if (peers.length >= 2) {
+    const sortedScores = peers.map((p) => p.score).sort((a, b) => a - b);
+    const midIdx = Math.floor(sortedScores.length / 2);
+    const medianScore =
+      sortedScores.length % 2 !== 0
+        ? sortedScores[midIdx]
+        : (sortedScores[midIdx - 1] + sortedScores[midIdx]) / 2;
+
+    const sortedViews = peers
+      .map((p) => p.currentViews)
+      .sort((a, b) => a - b);
+    const medianViews =
+      sortedViews.length % 2 !== 0
+        ? sortedViews[midIdx]
+        : (sortedViews[midIdx - 1] + sortedViews[midIdx]) / 2;
+
+    if (trend.score > medianScore && medianScore > 0) {
+      const diffPct = Math.round(
+        ((trend.score - medianScore) / medianScore) * 100,
+      );
+      if (diffPct >= 10) {
+        fired.push({
+          id: "engagement_above_median",
+          title: "Engagement above category median",
+          detail: `Performance score of ${trend.score}/100 is +${diffPct}% above the ${mainCategory} category median (${Math.round(medianScore)}/100)`,
+          strength: diffPct * 1.4,
+        });
+      }
+    } else if (trend.currentViews > medianViews && medianViews > 0) {
+      const ratio = (trend.currentViews / medianViews).toFixed(1);
+      if (Number(ratio) >= 1.2) {
+        fired.push({
+          id: "engagement_above_median",
+          title: "Volume above category median",
+          detail: `Current volume of ${formatCount(trend.currentViews)} views is ${ratio}x above the ${mainCategory} category median (${formatCount(medianViews)})`,
+          strength: Number(ratio) * 20,
+        });
+      }
+    }
+  }
+
+  // Signal 4: Cross-platform presence
+  if (allTrends.length > 0) {
+    const categoryId = topic(trend).id;
+    const tiktokMatches = allTrends.filter(
+      (t) => t && Array.isArray(t.categories) && t.platform === "TikTok" && matchesCategory(t, categoryId),
+    );
+    const instaMatches = allTrends.filter(
+      (t) => t && Array.isArray(t.categories) && t.platform === "Instagram" && matchesCategory(t, categoryId),
+    );
+    if (tiktokMatches.length >= 1 && instaMatches.length >= 1) {
+      const combinedViews = [...tiktokMatches, ...instaMatches].reduce(
+        (sum, t) => sum + t.currentViews,
+        0,
+      );
+      const totalPosts = tiktokMatches.length + instaMatches.length;
+      fired.push({
+        id: "cross_platform_presence",
+        title: "Cross-platform presence",
+        detail: `Active on both TikTok (${tiktokMatches.length}) and Instagram (${instaMatches.length}) with ${formatCount(combinedViews)} combined views across ${totalPosts} verified posts`,
+        strength: Math.log10(Math.max(1, combinedViews)) * 6 + totalPosts * 3,
+      });
+    }
+  }
+
+  // Signal 5: 72-Hour trajectory projection (if forecast is ready)
+  if (
+    trend.prediction.method === "observed_growth" &&
+    trend.prediction.estimated_total !== null
+  ) {
+    const projectedGain = trend.prediction.estimated_total - current;
+    const gainPct =
+      current > 0 ? Math.round((projectedGain / current) * 100) : 0;
+    const rateStr = formatCount(
+      Math.round(trend.prediction.hourly_rate || 0),
+    );
+    fired.push({
+      id: "trajectory_projection",
+      title: "Projected 72-hour trajectory",
+      detail: `Projected +${formatCount(projectedGain)} views (+${gainPct}%) to reach ~${formatCount(trend.prediction.estimated_total)} over 3 days based on verified +${rateStr}/hr velocity`,
+      strength: Math.abs(gainPct),
+    });
+  }
+
+  // If collecting data and fewer than 2 signals fired, add baseline tracking bullet
+  if (fired.length < 2) {
+    fired.push({
+      id: "tracking_baseline",
+      title: "Baseline data collection",
+      detail: `First observation recorded at ${formatCount(trend.currentViews)} views; awaiting next scan interval to establish velocity baseline`,
+      strength: 5,
+    });
+  }
+
+  fired.sort((a, b) => b.strength - a.strength);
+  return fired.slice(0, Math.min(4, Math.max(2, fired.length)));
 }

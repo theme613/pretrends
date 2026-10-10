@@ -1,6 +1,6 @@
-# TrendRadar demo
+# Pretrends demo
 
-Small business owners need useful social-post ideas without hours of scrolling. TrendRadar shows recently verified videos, explains their content, and provides an editable three-step business post brief.
+Small business owners need useful social-post ideas without hours of scrolling. Pretrends shows recently verified videos, explains their content, and provides an editable three-step business post brief.
 
 ## Demo flow
 

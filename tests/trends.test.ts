@@ -20,7 +20,7 @@ import {
   mergeScans,
   previousObservation,
 } from "../src/lib/scan-store";
-import { matchesCategories, normalizeTrends } from "../src/lib/trends";
+import { cleanTrendMatterReason, matchesCategories, normalizeTrends, trendGrowthReasons } from "../src/lib/trends";
 import { allowedMediaUrl } from "../src/lib/video-frames";
 
 const now = Date.parse("2026-10-10T16:00:00Z");
@@ -413,21 +413,31 @@ test("API returns only eligible source posts and matching category counts", asyn
   );
 });
 
-test("display predictions keep real forecasts separate from labelled simulations", async () => {
+test("display predictions compute true growth from snapshot history and show collecting data for single snapshot", async () => {
   const { predictionDisplay } = await import("../src/lib/forecast");
   const real = calculateForecast(post());
-  assert.deepEqual(predictionDisplay(1240, real), { method: "observed_growth", estimated_total: 9880 });
+  const display = predictionDisplay(1240, real, 2);
+  assert.equal(display.method, "observed_growth");
+  assert.equal(display.estimated_total, 9880);
+  assert.equal(display.hourly_rate, 120);
+
+  // Single snapshot or unavailable history must NOT show a fake 25% number
   for (const status of ["first_observation", "too_soon", "invalid_observations", "decreasing_views"] as const) {
-    assert.deepEqual(predictionDisplay(101, { ...real, status, estimated_total: null }), { method: "demo_growth", estimated_total: 126 });
+    const singleSnapshot = predictionDisplay(101, { ...real, status, estimated_total: null });
+    assert.equal(singleSnapshot.method, "collecting_data");
+    assert.equal(singleSnapshot.estimated_total, null);
+    assert.equal(singleSnapshot.status_message, "Collecting data — check back after next scan");
   }
-  assert.equal(predictionDisplay(0, { ...real, status: "first_observation" }).estimated_total, 0);
+
   const source = post({ has_baseline: false });
   const normalized = normalizeTrends([source], now)[0];
   assert.equal(normalized.predictedViews, null);
-  assert.equal(normalized.prediction.estimated_total, 1550);
+  assert.equal(normalized.prediction.method, "collecting_data");
+  assert.equal(normalized.prediction.estimated_total, null);
   assert.equal(normalized.currentViews, 1240);
   assert.equal(normalized.score, normalizeTrends([post()], now)[0].score);
 });
+
 test("frequent refreshes keep the latest hour-old baseline without hiding count decreases", () => {
   const old = post({ collected_at: "2026-10-10T14:00:00Z", views_t1: 1000 });
   const recent = post({ collected_at: "2026-10-10T15:50:00Z", views_t1: 1200 });
@@ -438,4 +448,31 @@ test("frequent refreshes keep the latest hour-old baseline without hiding count 
   assert.equal(previousObservation(scans, post({ views_t1: 1100 })), recent);
   assert.equal(calculateForecast(compareObservation(post({ views_t1: 1100 }), recent)).status, "decreasing_views");
   assert.equal(previousObservation([{ timestamp: recent.collected_at, candidates: [recent] }], post()), recent);
+});
+
+test("cleanTrendMatterReason removes negative filler sentences about what is not visible", () => {
+  const dirty = "Frame 1 features active driving at night. No food, music, fashion, tech, game, meme, sports, crypto, or dance activities are visible. The content is exclusively automotive-focused.";
+  const cleaned = cleanTrendMatterReason(dirty);
+  assert.equal(cleaned, "Frame 1 features active driving at night. The content is exclusively automotive-focused.");
+  assert.ok(!cleaned.includes("No food"));
+
+  const dirty2 = "The subject poses in a dark coat. No other activities like cooking or music performance are visible.";
+  const cleaned2 = cleanTrendMatterReason(dirty2);
+  assert.equal(cleaned2, "The subject poses in a dark coat.");
+});
+
+test("trendGrowthReasons returns 2-4 evidence-driven bullets with real computed numbers", () => {
+  const p1 = normalizeTrends([post()], now)[0];
+  const p2 = normalizeTrends([post({ id: "7546234572208377102", url: "https://www.tiktok.com/@chef/video/7546234572208377102", views_t0: 500, views_t1: 1500, score: 0.95 })], now)[0];
+  const collection = [p1, p2];
+
+  const reasons1 = trendGrowthReasons(p1, collection);
+  assert.ok(reasons1.length >= 2 && reasons1.length <= 4);
+  for (const reason of reasons1) {
+    assert.match(reason.detail, /\d+(\.\d+)?/);
+  }
+
+  const reasons2 = trendGrowthReasons(p2, collection);
+  assert.ok(reasons2.length >= 2 && reasons2.length <= 4);
+  assert.notEqual(reasons1[0].detail, reasons2[0].detail);
 });

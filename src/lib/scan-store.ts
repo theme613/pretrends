@@ -49,6 +49,8 @@ export async function readScans(): Promise<Scan[]> {
 export function mergeScans(scans: Scan[]): TrendCandidate[] {
   const posts = new Map<string, TrendCandidate>();
   const checks = new Map<string, Verification>();
+  const postObservations = new Map<string, Map<string, number>>();
+
   for (const scan of [...scans].sort((a, b) =>
     b.timestamp.localeCompare(a.timestamp),
   )) {
@@ -61,6 +63,27 @@ export function mergeScans(scans: Scan[]): TrendCandidate[] {
         continue;
       const key = `${post.platform}:${post.id}`;
       if (!posts.has(key)) posts.set(key, post);
+
+      if (!postObservations.has(key)) {
+        postObservations.set(key, new Map());
+      }
+      const obsMap = postObservations.get(key)!;
+      if (
+        post.has_baseline &&
+        post.baseline_at &&
+        Number.isSafeInteger(post.views_t0) &&
+        post.views_t0 !== null &&
+        post.views_t0 >= 0
+      ) {
+        obsMap.set(post.baseline_at, post.views_t0);
+      }
+      if (
+        post.collected_at &&
+        Number.isSafeInteger(post.views_t1) &&
+        post.views_t1 >= 0
+      ) {
+        obsMap.set(post.collected_at, post.views_t1);
+      }
     }
     for (const check of scan.verifications || []) {
       const key = `${check.platform}:${check.id}`;
@@ -71,9 +94,11 @@ export function mergeScans(scans: Scan[]): TrendCandidate[] {
         checks.set(key, check);
     }
   }
+
   return [...posts.values()].map((post) => {
-    const check = checks.get(`${post.platform}:${post.id}`);
-    const updated =
+    const key = `${post.platform}:${post.id}`;
+    const check = checks.get(key);
+    let updated =
       check &&
       Date.parse(check.checked_at) >=
         Date.parse(post.source_verified_at || "1970-01-01")
@@ -84,7 +109,71 @@ export function mergeScans(scans: Scan[]): TrendCandidate[] {
             source_run_id: check.run_id,
           }
         : post;
-    return { ...updated, forecast: calculateForecast(updated) };
+
+    const obsMap = postObservations.get(key);
+    const snapshots: Array<{ views: number; timestamp: string }> = [];
+    if (obsMap) {
+      for (const [timestamp, views] of obsMap.entries()) {
+        if (Number.isFinite(Date.parse(timestamp))) {
+          snapshots.push({ timestamp, views });
+        }
+      }
+      snapshots.sort(
+        (a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp),
+      );
+    }
+
+    if (snapshots.length >= 2) {
+      const earliest = snapshots[0];
+      const latest = snapshots[snapshots.length - 1];
+      const hours_between =
+        (Date.parse(latest.timestamp) - Date.parse(earliest.timestamp)) /
+        3600000;
+      if (hours_between > 0) {
+        const hourly_growth_rate =
+          (latest.views - earliest.views) / hours_between;
+        const projected_total = Math.max(
+          0,
+          Math.round(latest.views + hourly_growth_rate * 72),
+        );
+        updated = {
+          ...updated,
+          views_t0: earliest.views,
+          views_t1: latest.views,
+          baseline_at: earliest.timestamp,
+          collected_at: latest.timestamp,
+          has_baseline: true,
+          snapshots,
+          hourly_growth_rate,
+          hours_between,
+          forecast: {
+            method: "linear-72h-v1",
+            status: "ready",
+            estimated_total: projected_total,
+            views_per_hour: hourly_growth_rate,
+            calculated_at: latest.timestamp,
+            target_at: new Date(
+              Date.parse(latest.timestamp) + 72 * 3600000,
+            ).toISOString(),
+          },
+        };
+        return updated;
+      }
+    }
+
+    const singleSnapshots =
+      snapshots.length > 0
+        ? snapshots
+        : [{ views: updated.views_t1, timestamp: updated.collected_at }];
+    updated = {
+      ...updated,
+      has_baseline: false,
+      snapshots: singleSnapshots,
+      hourly_growth_rate: null,
+      hours_between: null,
+      forecast: calculateForecast(updated),
+    };
+    return updated;
   });
 }
 

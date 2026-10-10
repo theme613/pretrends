@@ -51,6 +51,9 @@ export interface TrendCandidate extends ScrapedData {
   retry_after?: string;
   timings?: { download_ms: number; frame_ms: number; ai_ms: number };
   ai_usage?: { input_tokens: number; output_tokens: number; model: string };
+  snapshots?: Array<{ views: number; timestamp: string }>;
+  hourly_growth_rate?: number | null;
+  hours_between?: number | null;
 }
 
 export function contentFingerprint(post: ScrapedData) {

@@ -1,4 +1,4 @@
-# TrendRadar
+# Pretrends
 
 Verified social-video ideas for small business owners. No login is required.
 

@@ -183,7 +183,8 @@ test("atomic collection index rebuilds, source failures hide immediately, histor
     // Import in a separate process because the store directory is module-scoped.
     const { execFile } = await import("node:child_process");
     const { promisify } = await import("node:util");
-    const script = `import { saveScan, latestTrends, readScans } from ${JSON.stringify(path.join(originalCwd, "src/lib/scan-store.ts"))};
+    const { pathToFileURL } = await import("node:url");
+    const script = `import { saveScan, latestTrends, readScans } from ${JSON.stringify(pathToFileURL(path.join(originalCwd, "src/lib/scan-store.ts")).href)};
       import { promises as fs } from 'node:fs';
       const post = ${JSON.stringify(post())};
       await saveScan({ timestamp: new Date().toISOString(), candidates: [post] });
@@ -193,7 +194,7 @@ test("atomic collection index rebuilds, source failures hide immediately, histor
       await saveScan({ timestamp: new Date().toISOString(), candidates: [], verifications: [{ id: post.id, platform: post.platform, status: 'unavailable', checked_at: new Date(Date.now()+1).toISOString() }] });
       if ((await latestTrends()).length !== 0) throw Error('deleted post visible');
       if ((await readScans()).length !== 2) throw Error('history lost or index read as history');`;
-    await promisify(execFile)(process.execPath, ["--import", path.join(originalCwd, "node_modules/tsx/dist/loader.mjs"), "--input-type=module", "-e", script], { cwd: directory });
+    await promisify(execFile)(process.execPath, ["--import", pathToFileURL(path.join(originalCwd, "node_modules/tsx/dist/loader.mjs")).href, "--input-type=module", "-e", script], { cwd: directory });
   } finally { process.chdir(originalCwd); await fs.rm(directory, { recursive: true, force: true }); }
 });
 

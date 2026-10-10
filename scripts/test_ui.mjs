@@ -76,7 +76,7 @@ try {
     assert.equal(await batchPage.locator(".trend-card").count(), 12);
     const titles = await batchPage.locator(".card-open").allTextContents();
     assert.deepEqual([...titles].sort(), stored.slice(-12).map((post) => post.title).sort());
-    assert.equal(await batchPage.locator(".trend-card .demo-estimate").count(), 12);
+    assert.equal(await batchPage.locator(".trend-card .collecting-note").count(), 12);
     await batchPage.getByRole("textbox", { name: "Search ideas" }).fill(titles[0]);
     assert.ok(await batchPage.locator(".trend-card").count() >= 1);
     assert.ok(await batchPage.locator(".trend-card").count() < 12);
@@ -88,8 +88,8 @@ try {
     await batchPage.locator(".trend-card").getByText("Refresh batch", { exact: true }).first().waitFor();
     await batchPage.locator(".card-action").first().click();
     const details = batchPage.getByRole("dialog");
-    await details.locator(".demo-estimate").waitFor();
-    assert.equal(await details.locator(".prediction-view strong").last().textContent(), "250");
+    await details.locator(".collecting-note").waitFor();
+    assert.equal(await details.locator(".collecting-data-val").textContent(), "Collecting data");
     await details.locator(".detail-caption summary").click();
     await details.locator("textarea").fill("My final hackathon brief");
     await batchPage.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin });

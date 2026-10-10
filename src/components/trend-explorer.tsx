@@ -17,6 +17,7 @@ import {
   RefreshCw,
   Search,
   Sparkles,
+  TrendingUp,
   X,
 } from "lucide-react";
 import {
@@ -27,11 +28,13 @@ import {
 } from "@/components/ui/dialog";
 import {
   categories,
+  cleanTrendMatterReason,
   growth,
   matchesCategories,
   matchesCategory,
   normalizeTrends,
   starterIdea,
+  trendGrowthReasons,
   type Trend,
 } from "@/lib/trends";
 import { PredictionViews } from "./prediction-views";
@@ -356,12 +359,12 @@ export default function TrendExplorer({
         <button
           className="brand"
           onClick={resetFilters}
-          aria-label="TrendRadar home"
+          aria-label="Pretrends home"
         >
           <span className="brand-symbol">
             <Radar size={23} strokeWidth={1.7} />
           </span>
-          trendradar<span className="brand-period">.</span>
+          pretrends<span className="brand-period">.</span>
         </button>
       </header>
 
@@ -628,7 +631,7 @@ export default function TrendExplorer({
         </section>
       </main>
       <footer className="page-width site-footer">
-        <span className="footer-brand">trendradar.</span>
+        <span className="footer-brand">pretrends.</span>
         <span>A little ahead of the curve.</span>
         <span>
           Built for the next good idea <Sparkles size={13} />
@@ -749,7 +752,23 @@ export default function TrendExplorer({
                 </section>
                 <section className="detail-explanation">
                   <h3>Why this trend matters</h3>
-                  <p>{selected.reason}</p>
+                  <p>{cleanTrendMatterReason(selected.reason, selected.categoryEvidence)}</p>
+                  <div className="growth-reasons">
+                    <h4 className="growth-reasons-title">
+                      <TrendingUp size={16} />
+                      Why this video is projected to grow
+                    </h4>
+                    <ul className="growth-reasons-list">
+                      {trendGrowthReasons(selected, trends).map((point, index) => (
+                        <li key={index} className="growth-reason-item">
+                          <span className="growth-reason-bullet" aria-hidden="true" />
+                          <div className="growth-reason-text">
+                            <strong>{point.title}:</strong> {point.detail}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 </section>
                 <section className="detail-plan">
                   <div className="detail-plan-heading">

@@ -47,7 +47,7 @@ export function calculateForecast(post: {
   const hours = (end - start) / 3600000;
   if (hours < 1) return { ...result, status: "too_soon" };
   const rate = (post.views_t1 - post.views_t0) / hours;
-  const estimate = Math.round(post.views_t1 + rate * 72);
+  const estimate = Math.max(0, Math.round(post.views_t1 + rate * 72));
   if (
     !Number.isSafeInteger(estimate) ||
     !Number.isFinite(new Date(end + 72 * 3600000).getTime())
@@ -66,25 +66,53 @@ export function forecastMessage(status: Forecast["status"]) {
   return {
     ready:
       "This estimate assumes the recent pace continues. Actual views may differ.",
-    first_observation: "Fetch again later to estimate growth.",
+    first_observation: "Collecting data — check back after next scan",
     too_soon:
-      "The two fetches are less than an hour apart. Fetch again later for an estimate.",
+      "Collecting data — check back after next scan",
     invalid_observations:
-      "These observations cannot be compared. A valid later fetch is needed.",
+      "Collecting data — check back after next scan",
     decreasing_views:
       "The recorded count decreased, so a growth estimate is unavailable.",
   }[status];
 }
 
-// Display-only simulation. Never use this value as an observation or ranking signal.
 export type PredictionDisplay = {
-  method: "observed_growth" | "demo_growth";
-  estimated_total: number;
+  method: "observed_growth" | "collecting_data";
+  estimated_total: number | null;
+  hourly_rate?: number | null;
+  hours_between?: number | null;
+  diff?: number | null;
+  percent?: number | null;
+  status_message?: string;
 };
-export function predictionDisplay(currentViews: number, forecast: Forecast): PredictionDisplay {
-  if (forecast.status === "ready" && forecast.estimated_total !== null &&
-      Number.isSafeInteger(forecast.estimated_total) && forecast.estimated_total >= 0) {
-    return { method: "observed_growth", estimated_total: forecast.estimated_total };
+
+export function predictionDisplay(
+  currentViews: number,
+  forecast: Forecast,
+  hoursBetween?: number | null,
+): PredictionDisplay {
+  if (
+    forecast.status === "ready" &&
+    forecast.estimated_total !== null &&
+    Number.isSafeInteger(forecast.estimated_total) &&
+    forecast.estimated_total >= 0
+  ) {
+    const diff = forecast.estimated_total - currentViews;
+    const percent =
+      currentViews > 0 ? Math.round((diff / currentViews) * 100) : 0;
+    return {
+      method: "observed_growth",
+      estimated_total: forecast.estimated_total,
+      hourly_rate: forecast.views_per_hour,
+      hours_between: hoursBetween ?? (forecast.views_per_hour !== null ? 72 : null),
+      diff,
+      percent,
+    };
   }
-  return { method: "demo_growth", estimated_total: Math.round(currentViews * 1.25) };
+
+  return {
+    method: "collecting_data",
+    estimated_total: null,
+    status_message: "Collecting data — check back after next scan",
+  };
 }
