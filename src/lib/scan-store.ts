@@ -190,13 +190,17 @@ async function indexedCandidates(): Promise<TrendCandidate[]> {
   const signature = await historySignature();
   try {
     const index = JSON.parse(await fs.readFile(indexFile, "utf8"));
-    if (index.version !== 1 || index.signature !== signature || !Array.isArray(index.candidates) ||
+    if (index.version !== 1 || (signature && index.signature !== signature) || !Array.isArray(index.candidates) ||
         !index.candidates.every((post: TrendCandidate) => post && typeof post.id === "string" && typeof post.platform === "string"))
       throw new Error("Collection index needs rebuilding.");
     return index.candidates;
   } catch {
     const candidates = mergeScans(await readScans());
-    await writeIndex(candidates);
+    try {
+      await writeIndex(candidates);
+    } catch {
+      /* ignore write failure in read-only environment */
+    }
     return candidates;
   }
 }
@@ -204,10 +208,17 @@ export function latestTrends(): Promise<TrendCandidate[]> {
   return serialized(async () => (await indexedCandidates()).filter((post) => isEligiblePost(post)).map((post) => ({ ...post, preview_key: previewKey(post) })));
 }
 async function writeIndex(candidates: TrendCandidate[]) {
-  await fs.mkdir(directory, { recursive: true });
-  const temporary = `${indexFile}.${randomUUID()}.tmp`;
-  await fs.writeFile(temporary, JSON.stringify({ version: 1, signature: await historySignature(), candidates }));
-  await fs.rename(temporary, indexFile);
+  try {
+    await fs.mkdir(directory, { recursive: true });
+    const temporary = `${indexFile}.${randomUUID()}.tmp`;
+    await fs.writeFile(temporary, JSON.stringify({ version: 1, signature: await historySignature(), candidates }));
+    await fs.rename(temporary, indexFile);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EROFS") {
+      return;
+    }
+    throw error;
+  }
 }
 
 function sameSourceObservation(candidate: TrendCandidate, post: ScrapedData) {
