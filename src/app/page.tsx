@@ -157,24 +157,40 @@ export default function TrendRadarDashboard() {
                   <TableHeader>
                     <TableRow className="border-b-slate-100 hover:bg-transparent">
                       <TableHead className="w-12 font-medium text-slate-400">#</TableHead>
-                      <TableHead className="font-medium text-slate-400">Trend Name</TableHead>
-                      <TableHead className="font-medium text-slate-400">Category</TableHead>
+                      <TableHead className="font-medium text-slate-400">Trend</TableHead>
+                      <TableHead className="font-medium text-slate-400">Categories</TableHead>
+                      <TableHead className="w-32 font-medium text-slate-400">Peak Prediction</TableHead>
                       <TableHead className="w-48 font-medium text-slate-400">Heat Indicator</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {trends.map((trend) => (
-                      <TableRow key={trend.name} className="border-b-slate-50/50 hover:bg-slate-50/50 transition-colors">
+                      <TableRow key={trend.id || trend.name} className="border-b-slate-50/50 hover:bg-slate-50/50 transition-colors">
                         <TableCell className="font-semibold text-slate-500">{trend.rank}</TableCell>
-                        <TableCell className="font-semibold text-slate-800 text-base">
-                          {trend.name}
+                        <TableCell>
+                          <div className="flex flex-col gap-1">
+                            <a href={trend.url || "#"} target="_blank" rel="noreferrer" className="font-semibold text-slate-800 text-base hover:underline flex items-center gap-2">
+                              {trend.name || trend.title}
+                              {!trend.url && <Badge variant="outline" className="text-[10px] h-4 px-1">Demo</Badge>}
+                            </a>
+                            <div className="flex items-center gap-2 text-sm text-slate-500">
+                              <Avatar className="h-4 w-4"><AvatarFallback>{(trend.creator?.[0] || '?').toUpperCase()}</AvatarFallback></Avatar>
+                              <span>{trend.creator || 'Unknown'}</span>
+                              <span>•</span>
+                              <span>{trend.platform || 'Web'}</span>
+                            </div>
+                            <p className="text-xs text-slate-400 italic">"{trend.reason || 'Growing steadily across platforms.'}"</p>
+                          </div>
                         </TableCell>
                         <TableCell>
                           <div className="flex gap-1 flex-wrap">
                             {trend.categories.map((c: string) => (
-                              <Badge key={c} variant="secondary" className="bg-slate-100 text-slate-600 font-medium border-none">{CATEGORIES.find(cat => cat.id === c)?.label || c}</Badge>
+                              <Badge key={c} variant="secondary" className="bg-slate-100 text-slate-600 font-medium border-none capitalize">{c}</Badge>
                             ))}
                           </div>
+                        </TableCell>
+                        <TableCell className="text-sm font-medium text-slate-600">
+                          {trend.score > 80 ? "1-2 days" : trend.score > 50 ? "3-5 days" : "1 week+"}
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-3">

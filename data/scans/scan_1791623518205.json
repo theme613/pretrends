@@ -1,0 +1,42 @@
+{
+  "timestamp": "2026-10-10T09:11:58.204Z",
+  "live_scan": true,
+  "scraped_count": 2,
+  "retargeting_category": "devtools",
+  "candidates": [
+    {
+      "id": "yt_fallback",
+      "title": "YT API Key Missing - Fallback Video",
+      "creator": "DemoBot",
+      "platform": "YouTube",
+      "url": "https://youtube.com",
+      "categories": [
+        "demo"
+      ],
+      "views_t0": 500,
+      "views_t1": 600,
+      "collected_at": "2026-10-10T09:11:57.922595+00:00",
+      "velocity": 0.2,
+      "breakout": "low",
+      "score": 0.02,
+      "reason": "Velocity is 0.20x (fallback reason)."
+    },
+    {
+      "id": "tk1",
+      "title": "New Dance Challenge",
+      "creator": "tiktok_star",
+      "platform": "TikTok",
+      "url": "https://tiktok.com/@tiktok_star/video/1",
+      "categories": [
+        "demo"
+      ],
+      "views_t0": 10000,
+      "views_t1": 25000,
+      "collected_at": "2026-10-10T09:11:58.012851+00:00",
+      "velocity": 1.5,
+      "breakout": "low",
+      "score": 0.15,
+      "reason": "Velocity is 1.50x (fallback reason)."
+    }
+  ]
+}

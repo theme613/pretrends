@@ -1,2 +1,5 @@
-# This project was built using Node.js instead of Python as requested in the prompt.
-# See package.json for dependencies.
+instaloader
+twikit
+tiktokapi
+yt-dlp
+google-api-python-client

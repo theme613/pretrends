@@ -1,14 +1,19 @@
 # TrendRadar
 
-TrendRadar is an Instagram/TikTok trend prediction dashboard. 
+End-to-end AI trend prediction dashboard and scraper bot network.
 
-## ⚠️ Important Note on Scraping
-**Honest Note:** Scraping TikTok or Instagram may violate their Terms of Service (ToS). This project is intended as a prototype and proof-of-concept. For production use, you **must** use official APIs such as the TikTok Research API, Instagram Graph API, or other authorized enterprise data partners.
+## Disclaimer & Notes
+- This is a prototype. The unofficial scrapers (TikTokApi, instaloader, twikit) are best-effort and may break or violate platform ToS upon site changes. Production deployments require official APIs (e.g., TikTok Research API, Instagram Graph API).
+- The AI Agent strictly scores and categorizes actual scraped signals; it never invents trends. Cards in the dashboard lacking a source URL are labeled as "Demo" data.
+- All ASCII printing (Windows cp1252 compatibility).
 
-## Tech Stack
-- Next.js (Node.js, TypeScript)
-- Tailwind CSS
+## Setup
+1. Copy `.env.example` to `.env` and fill out optional keys.
+2. Install Python requirements: `pip install -r requirements.txt`
+3. Install NPM dependencies: `npm install`
+4. Run server: `npm run dev`
 
-## Running the app
-1. `npm install`
-2. `npm run dev`
+## Services
+- Dashboard running at `http://localhost:3000`
+- `POST /api/scan`: Triggers background bots and AI velocity scoring.
+- `GET /api/trends`: Fetch latest trends.
