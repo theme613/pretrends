@@ -8,8 +8,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "TrendRadar Dashboard",
-  description: "Live trend prediction and bot fleet monitoring",
+  title: "TrendRadar — Big ideas for small businesses",
+  description: "Find growing trends and turn them into your next small business post. Less scrolling. More creating.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
