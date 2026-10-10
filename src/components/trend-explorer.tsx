@@ -292,6 +292,22 @@ export default function TrendExplorer({
       setRefreshing(false);
     }
   }
+
+  const [scanning, setScanning] = useState(false);
+  async function runLiveScan() {
+    setScanning(true);
+    setMessage("Running live Apify scan... This will take about 15 seconds.");
+    try {
+      const response = await fetch("/api/scan", { method: "POST", cache: "no-store" });
+      if (!response.ok) throw new Error("Scan failed");
+      await refresh();
+      setMessage("Live scan complete! Apify fetched new TikTok & Instagram posts.");
+    } catch {
+      setMessage("Live scan failed. Please check your Apify token.");
+    } finally {
+      setScanning(false);
+    }
+  }
   async function copyBrief() {
     if (!selected) return;
     const idea = starterIdea(selected, business);
@@ -347,6 +363,15 @@ export default function TrendExplorer({
             >
               <RefreshCw size={14} className={refreshing ? "spinning" : ""} />
               {refreshing ? "Refreshing…" : "Refresh ideas"}
+            </button>
+            <button
+              className="refresh-button"
+              onClick={runLiveScan}
+              disabled={scanning || refreshing}
+              style={{ marginLeft: "8px", background: "#4f46e5", color: "white", borderColor: "#4f46e5" }}
+            >
+              <RefreshCw size={14} className={scanning ? "spinning" : ""} />
+              {scanning ? "Scraping Apify..." : "Trigger Live Apify Scan"}
             </button>
           </div>
           <div className="filter-row">
@@ -528,6 +553,11 @@ export default function TrendExplorer({
                       <p><span className="font-semibold text-slate-800">Predict:</span> {trend.title}</p>
                       <p><span className="font-semibold text-slate-800">Why (Y):</span> {trend.reason}</p>
                       <p className="text-blue-700"><span className="font-semibold">Action (Z):</span> {trend.decision}</p>
+                      {trend.url && (
+                        <a href={trend.url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:text-indigo-800 underline font-medium mt-1 inline-flex items-center gap-1 w-max">
+                          ▶ Watch Original Video
+                        </a>
+                      )}
                     </div>
                     <div className="card-metrics">
                       <span
@@ -709,6 +739,11 @@ export default function TrendExplorer({
                   <p><span className="font-bold text-slate-800">Our AI Predicts:</span> {selected.title}</p>
                   <p><span className="font-bold text-slate-800">Why (Y):</span> {selected.reason}</p>
                   <p className="text-blue-800"><span className="font-bold">Action (Z):</span> {selected.decision}</p>
+                  {selected.url && (
+                    <a href={selected.url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:text-indigo-800 underline font-bold mt-2 inline-flex items-center gap-1 w-max">
+                      ▶ Watch Original Post
+                    </a>
+                  )}
                 </div>
                 <span className="evidence-source">
                   @{selected.creator} · {selected.platform} · Collection
