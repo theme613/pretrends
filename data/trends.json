@@ -1,0 +1,93 @@
+[
+  {
+    "id": "1",
+    "title": "Pedro Pedro Pedro Raccoon",
+    "creator": "@racoonlover",
+    "platform": "TikTok",
+    "categories": ["Meme", "Music"],
+    "thumbnail_url": "https://images.unsplash.com/photo-1543852786-1cf6624b9987?w=400&h=400&fit=crop",
+    "sound_name": "Pedro (Remix)",
+    "breakout_score": 0.98,
+    "heat_level": 3,
+    "predicted_peak": "1-2 days",
+    "source_url": "https://tiktok.com"
+  },
+  {
+    "id": "2",
+    "title": "Synthwave Sunset Drive",
+    "creator": "@retrocars",
+    "platform": "Instagram",
+    "categories": ["Car", "Music"],
+    "thumbnail_url": "https://images.unsplash.com/photo-1550684848-fac1c5b4e853?w=400&h=400&fit=crop",
+    "sound_name": "Midnight City (Sped Up)",
+    "breakout_score": 0.89,
+    "heat_level": 2,
+    "predicted_peak": "3-5 days",
+    "source_url": "https://instagram.com"
+  },
+  {
+    "id": "3",
+    "title": "Spicy Ramen Challenge 2.0",
+    "creator": "@foodie_jen",
+    "platform": "TikTok",
+    "categories": ["Food"],
+    "thumbnail_url": "https://images.unsplash.com/photo-1612929633738-8fe44f7ec841?w=400&h=400&fit=crop",
+    "sound_name": "Original Audio - foodie_jen",
+    "breakout_score": 0.75,
+    "heat_level": 1,
+    "predicted_peak": "4-7 days",
+    "source_url": "https://tiktok.com"
+  },
+  {
+    "id": "4",
+    "title": "Y2K Low Rise Revival",
+    "creator": "@fashionarchive",
+    "platform": "Instagram",
+    "categories": ["Fashion"],
+    "thumbnail_url": "https://images.unsplash.com/photo-1550614000-4b95d415d8f0?w=400&h=400&fit=crop",
+    "sound_name": "Gimme More (Instrumental)",
+    "breakout_score": 0.92,
+    "heat_level": 3,
+    "predicted_peak": "2-3 days",
+    "source_url": "https://instagram.com"
+  },
+  {
+    "id": "5",
+    "title": "Shuffle Jumpstyle 2024",
+    "creator": "@dancecrew",
+    "platform": "TikTok",
+    "categories": ["Dance", "Music"],
+    "thumbnail_url": "https://images.unsplash.com/photo-1502519144081-acca18599776?w=400&h=400&fit=crop",
+    "sound_name": "Jump Jump",
+    "breakout_score": 0.85,
+    "heat_level": 2,
+    "predicted_peak": "2-4 days",
+    "source_url": "https://tiktok.com"
+  },
+  {
+    "id": "6",
+    "title": "Elden Ring DLC No Hit",
+    "creator": "@gamergod",
+    "platform": "TikTok",
+    "categories": ["Game"],
+    "thumbnail_url": "https://images.unsplash.com/photo-1605901309584-818e25960b8f?w=400&h=400&fit=crop",
+    "sound_name": "Boss Theme Epic",
+    "breakout_score": 0.81,
+    "heat_level": 2,
+    "predicted_peak": "3-5 days",
+    "source_url": "https://tiktok.com"
+  },
+  {
+    "id": "7",
+    "title": "Euro 2024 Fan Reactions",
+    "creator": "@footballdaily",
+    "platform": "Instagram",
+    "categories": ["Sports"],
+    "thumbnail_url": "https://images.unsplash.com/photo-1518605368461-1ee7e53f191b?w=400&h=400&fit=crop",
+    "sound_name": "Crowd Cheers",
+    "breakout_score": 0.99,
+    "heat_level": 3,
+    "predicted_peak": "1-2 days",
+    "source_url": "https://instagram.com"
+  }
+]
