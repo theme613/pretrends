@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -37,7 +38,58 @@ import {
 } from "@/lib/trends";
 import "./trend-explorer.css";
 const featuredIds = ["t16", "t7", "t26", "t24", "t10", "t29"];
-function TrendArtwork({ trend }: { trend: Trend }) {
+function FilterMenu({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger className="filter-trigger" aria-label={label}>
+        {options.find((option) => option.value === value)?.label}
+        <ChevronDown size={15} />
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          className="filter-menu"
+          align="end"
+          sideOffset={6}
+          collisionPadding={12}
+        >
+          <DropdownMenu.RadioGroup value={value} onValueChange={onChange}>
+            {options.map((option) => (
+              <DropdownMenu.RadioItem
+                className="filter-option"
+                key={option.value}
+                value={option.value}
+              >
+                <span className="filter-check">
+                  <DropdownMenu.ItemIndicator>
+                    <Check size={14} />
+                  </DropdownMenu.ItemIndicator>
+                </span>
+                {option.label}
+              </DropdownMenu.RadioItem>
+            ))}
+          </DropdownMenu.RadioGroup>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+function TrendArtwork({
+  trend,
+  eager = false,
+}: {
+  trend: Trend;
+  eager?: boolean;
+}) {
   const [failedImage, setFailedImage] = useState<string | null>(null);
   const category = topic(trend).id;
   if (trend.image && failedImage !== trend.image)
@@ -48,7 +100,8 @@ function TrendArtwork({ trend }: { trend: Trend }) {
         <img
           src={trend.image}
           alt={trend.title}
-          loading="lazy"
+          loading={eager ? "eager" : "lazy"}
+          decoding="async"
           referrerPolicy="no-referrer"
           onError={() => setFailedImage(trend.image)}
           style={{ width: "100%", height: "100%", objectFit: "cover" }}
@@ -222,6 +275,7 @@ export default function TrendExplorer({
   const [sort, setSort] = useState("curated");
   const [saved, setSaved] = useState<string[]>([]);
   const [selected, setSelected] = useState<Trend | null>(null);
+  const detailTrigger = useRef<HTMLButtonElement | null>(null);
   const [howOpen, setHowOpen] = useState(false);
   const [business, setBusiness] = useState("");
   const [caption, setCaption] = useState("");
@@ -264,7 +318,8 @@ export default function TrendExplorer({
         : `Saved ${trend.title} for this session.`,
     );
   }
-  function openIdea(trend: Trend) {
+  function openIdea(trend: Trend, trigger: HTMLButtonElement) {
+    detailTrigger.current = trigger;
     setSelected(trend);
     setCaption(starterIdea(trend, business).hook);
     setCopied(false);
@@ -410,28 +465,24 @@ export default function TrendExplorer({
                 Pick a trend. See the signal. Give it your own business twist.
               </p>
             </div>
-            <button
-              className="refresh-button"
-              onClick={refresh}
-              disabled={refreshing || scanning}
-            >
-              <RefreshCw size={14} className={refreshing ? "spinning" : ""} />
-              {refreshing ? "Refreshing…" : "Refresh ideas"}
-            </button>
-            <button
-              className="refresh-button"
-              onClick={runLiveScan}
-              disabled={scanning || refreshing}
-              style={{
-                marginLeft: "8px",
-                background: "#77628e",
-                color: "white",
-                borderColor: "#77628e",
-              }}
-            >
-              <RefreshCw size={14} className={scanning ? "spinning" : ""} />
-              {scanning ? "Scanning…" : "Find fresh trends"}
-            </button>
+            <div className="collection-actions">
+              <button
+                className="collection-button"
+                onClick={refresh}
+                disabled={refreshing || scanning}
+              >
+                <RefreshCw size={14} className={refreshing ? "spinning" : ""} />
+                {refreshing ? "Refreshing…" : "Refresh ideas"}
+              </button>
+              <button
+                className="collection-button collection-button-primary"
+                onClick={runLiveScan}
+                disabled={scanning || refreshing}
+              >
+                <RefreshCw size={14} className={scanning ? "spinning" : ""} />
+                {scanning ? "Scanning…" : "Find fresh trends"}
+              </button>
+            </div>
           </div>
           <div className="filter-row">
             <div className="category-list" aria-label="Filter by topic">
@@ -489,38 +540,30 @@ export default function TrendExplorer({
               )}
             </label>
             <div className="toolbar-selects">
-              <label className="select-control">
-                <select
-                  aria-label="Filter by platform"
-                  value={platform}
-                  onChange={(event) => {
-                    setPlatform(event.target.value);
-                    setVisibleCount(24);
-                  }}
-                >
-                  <option value="all">All platforms</option>
-                  {Array.from(
+              <FilterMenu
+                label="Filter by platform"
+                value={platform}
+                options={[
+                  { value: "all", label: "All platforms" },
+                  ...Array.from(
                     new Set(trends.map((trend) => trend.platform)),
-                  ).map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown size={13} />
-              </label>
-              <label className="select-control">
-                <select
-                  aria-label="Sort ideas"
-                  value={sort}
-                  onChange={(event) => setSort(event.target.value)}
-                >
-                  <option value="curated">Editor&apos;s picks</option>
-                  <option value="growth">View growth</option>
-                  <option value="score">Signal score</option>
-                </select>
-                <ChevronDown size={13} />
-              </label>
+                  ).map((name) => ({ value: name, label: name })),
+                ]}
+                onChange={(value) => {
+                  setPlatform(value);
+                  setVisibleCount(24);
+                }}
+              />
+              <FilterMenu
+                label="Sort ideas"
+                value={sort}
+                options={[
+                  { value: "curated", label: "Editor's picks" },
+                  { value: "growth", label: "View growth" },
+                  { value: "score", label: "Signal score" },
+                ]}
+                onChange={setSort}
+              />
             </div>
           </div>
           <div className="collection-caption">
@@ -553,13 +596,7 @@ export default function TrendExplorer({
               return (
                 <article className="trend-card" key={trend.id}>
                   <div className="card-image">
-                    <button
-                      className="art-button"
-                      aria-label={`Explore ${trend.title}`}
-                      onClick={() => openIdea(trend)}
-                    >
-                      <TrendArtwork trend={trend} />
-                    </button>
+                    <TrendArtwork trend={trend} />
                     <span className="platform-tag">
                       {trend.platform === "TikTok"
                         ? "♪"
@@ -606,38 +643,17 @@ export default function TrendExplorer({
                       </span>
                     </div>
                     <h3>
-                      <button onClick={() => openIdea(trend)}>
+                      <button
+                        className="card-open"
+                        aria-haspopup="dialog"
+                        aria-label={`View details for ${trend.title}`}
+                        onClick={(event) =>
+                          openIdea(trend, event.currentTarget)
+                        }
+                      >
                         {trend.title}
                       </button>
                     </h3>
-                    <div className="card-description mt-2 text-sm flex flex-col gap-1.5 p-3 bg-slate-50 border border-slate-100 rounded-md">
-                      <p>
-                        <span className="font-semibold text-slate-800">
-                          Predict:
-                        </span>{" "}
-                        {trend.title}
-                      </p>
-                      <p>
-                        <span className="font-semibold text-slate-800">
-                          Why (Y):
-                        </span>{" "}
-                        {trend.reason}
-                      </p>
-                      <p className="text-blue-700">
-                        <span className="font-semibold">Action (Z):</span>{" "}
-                        {trend.decision}
-                      </p>
-                      {trend.url && (
-                        <a
-                          href={trend.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-indigo-600 hover:text-indigo-800 underline font-medium mt-1 inline-flex items-center gap-1 w-max"
-                        >
-                          ▶ Watch Original Video
-                        </a>
-                      )}
-                    </div>
                     <div className="card-metrics">
                       <span
                         className={`growth-value ${percent !== null && percent < 0 ? "growth-negative" : ""}`}
@@ -646,7 +662,7 @@ export default function TrendExplorer({
                         {percent === null
                           ? "Baseline saved"
                           : `${percent > 0 ? "+" : ""}${percent.toLocaleString()}%`}{" "}
-                        <span>{percent === null ? "yet" : "views"}</span>
+                        {percent !== null && <span>views</span>}
                       </span>
                       <span>
                         {formatCount(trend.after ?? trend.before)} views{" "}
@@ -654,12 +670,9 @@ export default function TrendExplorer({
                         {trend.demo ? "Sample" : "Stored"}
                       </span>
                     </div>
-                    <button
-                      className="card-action"
-                      onClick={() => openIdea(trend)}
-                    >
+                    <span className="card-action" aria-hidden="true">
                       View trend <ArrowUpRight size={17} />
-                    </button>
+                    </span>
                   </div>
                 </article>
               );
@@ -782,11 +795,18 @@ export default function TrendExplorer({
           if (!open) setSelected(null);
         }}
       >
-        <DialogContent className="idea-dialog trend-detail-dialog">
+        <DialogContent
+          className="idea-dialog trend-detail-dialog"
+          overlayClassName="trend-detail-overlay"
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            detailTrigger.current?.focus({ preventScroll: true });
+          }}
+        >
           {selected && (
             <>
               <div className="detail-cover">
-                <TrendArtwork trend={selected} />
+                <TrendArtwork trend={selected} eager />
                 <span className="detail-cover-label">
                   {selected.platform} ·{" "}
                   {selected.demo ? "Sample trend" : "Stored trend"}
@@ -805,6 +825,7 @@ export default function TrendExplorer({
                         <span key={category.id}>{category.label}</span>
                       ))}
                   </div>
+                  <span className="detail-eyebrow">Predict</span>
                   <DialogTitle>{selected.title}</DialogTitle>
                   <DialogDescription>
                     By @{selected.creator.replace(/^@/, "")} ·{" "}
@@ -853,17 +874,17 @@ export default function TrendExplorer({
                   </span>
                   {selected.url && (
                     <a
-                      className="research-link"
+                      className="detail-video-link"
                       href={selected.url}
                       target="_blank"
                       rel="noreferrer"
                     >
-                      View original source <ExternalLink size={13} />
+                      Watch original video <ExternalLink size={15} />
                     </a>
                   )}
                 </div>
                 <section className="detail-explanation">
-                  <h3>Why it’s getting attention</h3>
+                  <h3>Why this trend matters</h3>
                   <p>
                     {selected.reason}{" "}
                     {selected.after !== null &&
@@ -879,7 +900,7 @@ export default function TrendExplorer({
                   <div className="detail-plan-heading">
                     <Sparkles size={19} />
                     <div>
-                      <h3>Make this trend your own</h3>
+                      <h3>Action: make this trend your own</h3>
                       <p>
                         {selected.decision ||
                           "Start with one simple post. Here’s how."}
