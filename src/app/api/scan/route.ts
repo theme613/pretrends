@@ -1,3 +1,5 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import { NextResponse, after } from "next/server";
 import { randomUUID } from "node:crypto";
 import { processCandidates, type TrendCandidate } from "@/lib/agent";
@@ -144,15 +146,16 @@ const hashtags: Record<string, string[]> = {
 };
 
 export async function POST(request: Request) {
-  if (!process.env.APIFY_API_TOKEN)
-    return NextResponse.json(
-      { error: "Add APIFY_API_TOKEN to .env.local." },
-      { status: 503 },
-    );
   if (state.pretrendsScanJob?.status === "running") {
     return NextResponse.json(
       { id: state.pretrendsScanJob.id },
       { status: 202 },
+    );
+  }
+  if (!process.env.APIFY_API_TOKEN) {
+    return NextResponse.json(
+      { error: "Add APIFY_API_TOKEN to .env and restart the dev server." },
+      { status: 503 },
     );
   }
   let input: { categories?: unknown; platform?: unknown };
@@ -286,11 +289,32 @@ async function collect(
     const observations = unique.map((post) =>
       compareObservation(post, previous.get(`${post.platform}:${post.id}`)),
     );
-    job.total = observations.length;
+    // Keep only the top 50 before sending to the AI for performance.
+    const topObservations = observations
+      .sort((a, b) => {
+        const vA =
+          a.views_t0 && a.views_t0 > 0
+            ? (a.views_t1 - a.views_t0) / a.views_t0
+            : -1;
+        const vB =
+          b.views_t0 && b.views_t0 > 0
+            ? (b.views_t1 - b.views_t0) / b.views_t0
+            : -1;
+        if (vA !== vB) return vB - vA;
+        return b.views_t1 - a.views_t1;
+      })
+      .slice(0, 50);
+
+    job.total = topObservations.length;
     job.stage = "Preparing AI guidance";
-    const candidates = await processCandidates(observations, (processed) => {
-      job.processed = processed;
-    });
+    const allCandidates = await processCandidates(
+      topObservations,
+      (processed) => {
+        job.processed = processed;
+      },
+    );
+    // Keep top 50 by AI score so the UI stays fast and focused (it's 50 already, but sort it).
+    const candidates = [...allCandidates].sort((a, b) => b.score - a.score);
     job.stage = "Saving posts…";
     const unavailable = candidates.filter(
       (candidate) => candidate.ai_status === "unavailable",
@@ -320,3 +344,4 @@ async function collect(
     );
   }
 }
+

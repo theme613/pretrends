@@ -15,8 +15,9 @@ export type Trend = {
   score: number;
   reason: string;
   decision: string;
-  demo: boolean;
   url: string | null;
+  predictedViews: number | null;
+  predictionReasons: [string, string, string] | null;
 };
 export const categories = [
   {
@@ -64,29 +65,37 @@ export const categories = [
     label: "Dance",
   },
 ];
+
+function cleanText(text: string): string {
+  if (typeof text !== "string") return "";
+  return text
+    .replace(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|([^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/g,
+      "$1",
+    )
+    .replace(/\uFFFD/g, "");
+}
+
 export function normalizeTrends(data: unknown): Trend[] {
   if (!Array.isArray(data)) throw new Error("Invalid trend data");
   return data.flatMap((item): Trend[] => {
     if (!item || typeof item !== "object" || typeof item.title !== "string")
       return [];
     const id = String(item.id ?? item.title);
-    // The repository's t1–t30 records have placeholder source links.
-    const demo = /^t([1-9]|[12]\d|30)$/.test(id) || !item.url;
     const rawScore = Number(item.breakout_score ?? item.score ?? 0);
     const url =
       typeof item.url === "string" && /^https?:\/\//i.test(item.url)
         ? item.url
         : null;
     const hasBaseline =
-      demo ||
-      (item.has_baseline !== undefined
+      item.has_baseline !== undefined
         ? item.has_baseline === true
-        : Boolean(item.baseline_at));
+        : Boolean(item.baseline_at);
     return [
       {
         id,
-        title: item.title,
-        creator: String(item.creator ?? "Unknown creator"),
+        title: cleanText(item.title),
+        creator: cleanText(String(item.creator ?? "Unknown creator")),
         platform: String(item.platform ?? "Web"),
         categories: Array.isArray(item.categories)
           ? item.categories.filter(
@@ -107,6 +116,7 @@ export function normalizeTrends(data: unknown): Trend[] {
                 (step: unknown): step is string => typeof step === "string",
               )
               .slice(0, 3)
+              .map(cleanText)
           : [],
         collectedAt:
           typeof item.collected_at === "string" ? item.collected_at : null,
@@ -123,15 +133,34 @@ export function normalizeTrends(data: unknown): Trend[] {
               ),
             )
           : 0,
-        reason: String(
-          item.reason ?? "Check the view counts to understand this signal.",
+        reason: cleanText(
+          String(
+            item.reason ?? "Check the view counts to understand this signal.",
+          ),
         ),
-        decision: String(
-          item.decision ??
-            "Start with one small post that fits your customers.",
+        decision: cleanText(
+          String(
+            item.decision ??
+              "Start with one small post that fits your customers.",
+          ),
         ),
-        demo,
-        url: demo ? null : url,
+        url,
+        predictedViews:
+          typeof item.predicted_views === "number" &&
+          Number.isFinite(item.predicted_views) &&
+          item.predicted_views > 0
+            ? Math.round(item.predicted_views)
+            : null,
+        predictionReasons:
+          Array.isArray(item.prediction_reasons) &&
+          item.prediction_reasons.length === 3 &&
+          item.prediction_reasons.every(
+            (r: unknown) => typeof r === "string" && (r as string).trim().length > 0,
+          )
+            ? (item.prediction_reasons.map((r) =>
+                cleanText(String(r)),
+              ) as [string, string, string])
+            : null,
       },
     ];
   });

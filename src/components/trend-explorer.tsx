@@ -17,6 +17,7 @@ import {
   RefreshCw,
   Search,
   Sparkles,
+  TrendingUp,
   X,
 } from "lucide-react";
 import {
@@ -37,7 +38,6 @@ import {
   type Trend,
 } from "@/lib/trends";
 import "./trend-explorer.css";
-const featuredIds = ["t16", "t7", "t26", "t24", "t10", "t29"];
 function FilterMenu({
   label,
   value,
@@ -272,7 +272,7 @@ export default function TrendExplorer({
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [platform, setPlatform] = useState("all");
-  const [sort, setSort] = useState("curated");
+  const [sort, setSort] = useState("score");
   const [saved, setSaved] = useState<string[]>([]);
   const [selected, setSelected] = useState<Trend | null>(null);
   const detailTrigger = useRef<HTMLButtonElement | null>(null);
@@ -295,16 +295,9 @@ export default function TrendExplorer({
     .sort((a, b) => {
       if (sort === "growth")
         return (growth(b) ?? -Infinity) - (growth(a) ?? -Infinity);
-      if (sort === "score") return b.score - a.score;
-      const aRank = featuredIds.indexOf(a.id),
-        bRank = featuredIds.indexOf(b.id);
-      return (
-        (aRank === -1 ? 100 : aRank) - (bRank === -1 ? 100 : bRank) ||
-        b.score - a.score
-      );
+      return b.score - a.score;
     });
   const visible = filtered.slice(0, visibleCount);
-  const hasDemo = trends.some((trend) => trend.demo);
   function toggleSave(trend: Trend) {
     const wasSaved = saved.includes(trend.id);
     setSaved((previous) =>
@@ -422,7 +415,7 @@ export default function TrendExplorer({
     const idea = starterIdea(selected, business);
     try {
       await navigator.clipboard.writeText(
-        `${business.trim() || "My business"} — ${selected.title}\n\nPost idea\n${caption}\n\nShot list\n${idea.steps.map((step, i) => `${i + 1}. ${step}`).join("\n")}\n\nStarter template inspired by ${selected.demo ? "a sample trend" : "a stored trend"}.`,
+        `${business.trim() || "My business"} — ${selected.title}\n\nPost idea\n${caption}\n\nShot list\n${idea.steps.map((step, i) => `${i + 1}. ${step}`).join("\n")}\n\nStarter template inspired by a stored trend.`,
       );
       setCopied(true);
     } catch {
@@ -558,7 +551,6 @@ export default function TrendExplorer({
                 label="Sort ideas"
                 value={sort}
                 options={[
-                  { value: "curated", label: "Editor's picks" },
                   { value: "growth", label: "View growth" },
                   { value: "score", label: "Signal score" },
                 ]}
@@ -572,9 +564,7 @@ export default function TrendExplorer({
               explore
             </span>
             <span>
-              {hasDemo
-                ? "Demo data · Not live predictions"
-                : "Real posts · AI suggestions"}
+              Real posts · AI suggestions
             </span>
           </div>
           {message && (
@@ -631,15 +621,23 @@ export default function TrendExplorer({
                           .map((cat) => cat.label)
                           .join(" · ")}
                       </span>
-                      <span className="signal-badge">
+                      <span
+                        className={`signal-badge ${
+                          trend.score >= 80
+                            ? "signal-strong"
+                            : trend.score >= 50
+                              ? "signal-medium"
+                              : "signal-weak"
+                        }`}
+                      >
                         <Flame size={12} />
                         {!trend.hasBaseline
                           ? "First observation"
                           : trend.score >= 80
-                            ? "Strong signal"
+                            ? "Trending signal"
                             : trend.score >= 50
-                              ? "Picking up"
-                              : "Worth a look"}
+                              ? "Mid signal"
+                              : "Weak signal"}
                       </span>
                     </div>
                     <h3>
@@ -666,8 +664,7 @@ export default function TrendExplorer({
                       </span>
                       <span>
                         {formatCount(trend.after ?? trend.before)} views{" "}
-                        <span className="metric-dot">·</span>{" "}
-                        {trend.demo ? "Sample" : "Stored"}
+                        <span className="metric-dot">·</span> Stored
                       </span>
                     </div>
                     <span className="card-action" aria-hidden="true">
@@ -774,8 +771,7 @@ export default function TrendExplorer({
           </ol>
           <div className="honest-note">
             Browse saved posts or find fresh trends. Live posts include AI
-            guidance when available; sample ideas are labelled. Saved ideas stay
-            for this session.
+            guidance when available. Saved ideas stay for this session.
           </div>
           <a
             className="research-link"
@@ -808,8 +804,7 @@ export default function TrendExplorer({
               <div className="detail-cover">
                 <TrendArtwork trend={selected} eager />
                 <span className="detail-cover-label">
-                  {selected.platform} ·{" "}
-                  {selected.demo ? "Sample trend" : "Stored trend"}
+                  {selected.platform} · Stored trend
                 </span>
               </div>
               <div className="detail-content">
@@ -832,7 +827,7 @@ export default function TrendExplorer({
                     {selected.platform}
                   </DialogDescription>
                 </header>
-                <div className="evidence-panel">
+                <div className={`evidence-panel evidence-panel--${selected.score >= 80 ? "strong" : selected.score >= 50 ? "medium" : "weak"}`}>
                   <div className="evidence-title">
                     <Radar size={16} />
                     <strong>Behind the signal</strong>
@@ -840,12 +835,12 @@ export default function TrendExplorer({
                   </div>
                   <div className="view-comparison">
                     <div>
-                      <span>Earlier views</span>
+                      <span>Current views</span>
                       <strong>{formatCount(selected.before)}</strong>
                     </div>
                     <ArrowRight size={20} />
                     <div>
-                      <span>Later views</span>
+                      <span>Estimated views</span>
                       <strong
                         className={
                           selected.after === null ? "waiting-views" : undefined
@@ -868,9 +863,7 @@ export default function TrendExplorer({
                   <span className="evidence-source">
                     {selected.baselineAt && selected.collectedAt
                       ? `${new Date(selected.baselineAt).toLocaleString()} → ${new Date(selected.collectedAt).toLocaleString()}`
-                      : selected.demo
-                        ? "Sample view counts · Collection interval unavailable"
-                        : "Starting views saved. Fetch this post again to compare the new views with this count."}
+                      : "Starting views saved. Fetch this post again to compare the new views with this count."}
                   </span>
                   {selected.url && (
                     <a
@@ -883,6 +876,28 @@ export default function TrendExplorer({
                     </a>
                   )}
                 </div>
+                {/* AI View Prediction Panel */}
+                {selected.predictedViews !== null && (
+                  <div className="prediction-panel">
+                    <div className="prediction-title">
+                      <TrendingUp size={16} />
+                      <strong>AI View Prediction</strong>
+                      <span className="prediction-estimate">
+                        {formatCount(selected.predictedViews)} estimated views
+                      </span>
+                    </div>
+                    {selected.predictionReasons && (
+                      <ol className="prediction-reasons">
+                        {selected.predictionReasons.map((reason, i) => (
+                          <li key={i}>
+                            <span className="reason-number">0{i + 1}</span>
+                            <span>{reason}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                  </div>
+                )}
                 <section className="detail-explanation">
                   <h3>Why this trend matters</h3>
                   <p>
@@ -988,11 +1003,9 @@ export default function TrendExplorer({
                   </button>
                 </div>
                 <p className="brief-footnote">
-                  {selected.demo
-                    ? "Sample guidance · Editable ideas, not a live AI prediction."
-                    : selected.aiStatus === "complete"
-                      ? "AI suggestions · Review and adapt them for your business."
-                      : "AI guidance unavailable · These steps are editable templates."}
+                  {selected.aiStatus === "complete"
+                    ? "AI suggestions · Review and adapt them for your business."
+                    : "AI guidance unavailable · These steps are editable templates."}
                 </p>
               </div>
             </>

@@ -934,10 +934,83 @@
   align-items: center;
   gap: 3px;
   font-size: 8px;
-  color: #8d8052;
-  background: #f7f1e1;
   padding: 4px 6px;
   border-radius: 4px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+/* Green = weak signal */
+.signal-weak {
+  color: #4a7c59;
+  background: #e6f4ec;
+}
+/* Orange = mid signal */
+.signal-medium {
+  color: #8a5a2e;
+  background: #fdf0e0;
+}
+/* Red = trending/strong signal */
+.signal-strong {
+  color: #8b2a2a;
+  background: #fde8e8;
+}
+/* Evidence panel border colour matches signal strength */
+.evidence-panel--weak {
+  border-color: #bde3cc;
+}
+.evidence-panel--medium {
+  border-color: #f5cfa0;
+}
+.evidence-panel--strong {
+  border-color: #f5a0a0;
+}
+/* AI Prediction panel */
+.prediction-panel {
+  margin-top: 10px;
+  padding: 16px;
+  border: 1px solid #ddd5eb;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #f4f0f9 0%, #f9f7fc 100%);
+}
+.prediction-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #6e549e;
+  font-size: 11px;
+  margin-bottom: 12px;
+}
+.prediction-title strong {
+  font-weight: 600;
+}
+.prediction-estimate {
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 700;
+  color: #5a3d85;
+  letter-spacing: -0.3px;
+}
+.prediction-reasons {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 9px;
+}
+.prediction-reasons li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 11px;
+  line-height: 1.65;
+  color: #7a6688;
+}
+.reason-number {
+  font-family: Georgia, serif;
+  font-size: 14px;
+  color: #a891bc;
+  flex-shrink: 0;
+  line-height: 1.3;
 }
 .card-content h3 {
   font-size: 17px;

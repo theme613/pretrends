@@ -38,10 +38,7 @@ export async function latestTrends(): Promise<unknown[]> {
       if (!posts.has(key)) posts.set(key, post);
     }
   }
-  if (posts.size) return [...posts.values()];
-  return JSON.parse(
-    await fs.readFile(path.join(process.cwd(), "data", "trends.json"), "utf8"),
-  );
+  return [...posts.values()];
 }
 
 export async function saveScan(scan: Scan) {
