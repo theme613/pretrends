@@ -3,7 +3,7 @@ import { createScanJob, runScan, scanOptions, type ScanJob } from "@/lib/scan-ru
 import { selectRefreshBatch, sameBatchFilters } from "@/lib/refresh-batch";
 import { latestTrends } from "@/lib/scan-store";
 
-export const maxDuration = 900;
+export const maxDuration = 60;
 const state = globalThis as typeof globalThis & { pretrendsScanJob?: ScanJob };
 const noStore = { "Cache-Control": "no-store" };
 export async function POST(request: Request) {

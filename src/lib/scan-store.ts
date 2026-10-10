@@ -263,11 +263,18 @@ export function previousObservation(
 
 export function saveScan(scan: Scan) {
   return serialized(async () => {
-    const current = await indexedCandidates();
-    const filename = path.join(directory, `scan_${Date.now()}_${randomUUID()}.json`);
-    await fs.writeFile(`${filename}.tmp`, JSON.stringify(scan));
-    await fs.rename(`${filename}.tmp`, filename);
-    await writeIndex(mergeScans([scan, { timestamp: "1970-01-01", candidates: current }]));
+    try {
+      const current = await indexedCandidates();
+      const filename = path.join(directory, `scan_${Date.now()}_${randomUUID()}.json`);
+      await fs.writeFile(`${filename}.tmp`, JSON.stringify(scan));
+      await fs.rename(`${filename}.tmp`, filename);
+      await writeIndex(mergeScans([scan, { timestamp: "1970-01-01", candidates: current }]));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EROFS") {
+        return;
+      }
+      throw error;
+    }
   });
 }
 

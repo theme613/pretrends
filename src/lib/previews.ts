@@ -3,8 +3,12 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { allowedMediaUrl, extractFrames } from "./video-frames";
 
+import os from "node:os";
+
 type PreviewPost = { platform: string; id: string; caption?: string; title: string; image?: string; video_url?: string; duration_seconds?: number; published_at?: string };
-const directory = path.join(process.cwd(), "data", "previews");
+const directory = process.env.VERCEL
+  ? path.join(os.tmpdir(), "pretrends-previews")
+  : path.join(process.cwd(), "data", "previews");
 export function previewKey(post: PreviewPost) {
   return createHash("sha256").update(JSON.stringify([post.platform, post.id, post.caption || post.title, post.duration_seconds ?? null, post.published_at ?? null])).digest("hex");
 }
