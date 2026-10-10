@@ -103,6 +103,7 @@ async function downloadVideo(url: string, parentSignal: AbortSignal) {
 export async function extractFrames(
   videoUrl: string,
   signal = AbortSignal.timeout(75000),
+  timings?: { download_ms: number; frame_ms: number },
 ): Promise<string[]> {
   if (!ffmpegPath) throw new Error("FFmpeg is unavailable on this server.");
   const directory = await fs.mkdtemp(
@@ -110,7 +111,10 @@ export async function extractFrames(
   );
   try {
     const video = path.join(directory, "video.mp4");
+    const started = Date.now();
     await fs.writeFile(video, await downloadVideo(videoUrl, signal));
+    if (timings) timings.download_ms = Date.now() - started;
+    const frameStarted = Date.now();
     let metadata = "";
     try {
       await execute(ffmpegPath, ["-hide_banner", "-i", video], {
@@ -166,6 +170,7 @@ export async function extractFrames(
         throw new Error("A video frame could not be extracted.");
       frames.push(`data:image/jpeg;base64,${stdout.toString("base64")}`);
     }
+    if (timings) timings.frame_ms = Date.now() - frameStarted;
     return frames;
   } finally {
     await fs.rm(directory, { recursive: true, force: true });

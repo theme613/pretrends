@@ -7,13 +7,20 @@ import {
   validSourceIdentity,
   type Verification,
 } from "./post-policy";
+import { previewKey } from "./previews";
 import { calculateForecast } from "./forecast";
 
 const directory = path.join(process.cwd(), "data", "scans");
+const indexFile = path.join(directory, "collection-index.json");
+// Share the queue across route bundles and development reloads in this process.
+const storeState = globalThis as typeof globalThis & { pretrendsStoreWrites?: Promise<void> };
 export type Scan = {
   timestamp: string;
   candidates: TrendCandidate[];
   verifications?: Verification[];
+  job_id?: string;
+  mode?: "refresh" | "prepare";
+  metrics?: object;
 };
 
 export async function readScans(): Promise<Scan[]> {
@@ -25,7 +32,7 @@ export async function readScans(): Promise<Scan[]> {
     throw error;
   }
   const scans: Scan[] = [];
-  for (const name of names.filter((name) => name.endsWith(".json"))) {
+  for (const name of names.filter((name) => name.startsWith("scan_") && name.endsWith(".json"))) {
     try {
       const data = JSON.parse(
         await fs.readFile(path.join(directory, name), "utf8"),
@@ -81,8 +88,37 @@ export function mergeScans(scans: Scan[]): TrendCandidate[] {
   });
 }
 
-export async function latestTrends(): Promise<TrendCandidate[]> {
-  return mergeScans(await readScans()).filter((post) => isEligiblePost(post));
+function serialized<T>(work: () => Promise<T>): Promise<T> {
+  const operation = (storeState.pretrendsStoreWrites || Promise.resolve()).then(work);
+  storeState.pretrendsStoreWrites = operation.then(() => undefined, () => undefined);
+  return operation;
+}
+async function historySignature() {
+  try { return (await fs.readdir(directory)).filter((name) => name.startsWith("scan_") && name.endsWith(".json")).sort().join("|"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return ""; throw error; }
+}
+async function indexedCandidates(): Promise<TrendCandidate[]> {
+  const signature = await historySignature();
+  try {
+    const index = JSON.parse(await fs.readFile(indexFile, "utf8"));
+    if (index.version !== 1 || index.signature !== signature || !Array.isArray(index.candidates) ||
+        !index.candidates.every((post: TrendCandidate) => post && typeof post.id === "string" && typeof post.platform === "string"))
+      throw new Error("Collection index needs rebuilding.");
+    return index.candidates;
+  } catch {
+    const candidates = mergeScans(await readScans());
+    await writeIndex(candidates);
+    return candidates;
+  }
+}
+export function latestTrends(): Promise<TrendCandidate[]> {
+  return serialized(async () => (await indexedCandidates()).filter((post) => isEligiblePost(post)).map((post) => ({ ...post, preview_key: previewKey(post) })));
+}
+async function writeIndex(candidates: TrendCandidate[]) {
+  await fs.mkdir(directory, { recursive: true });
+  const temporary = `${indexFile}.${randomUUID()}.tmp`;
+  await fs.writeFile(temporary, JSON.stringify({ version: 1, signature: await historySignature(), candidates }));
+  await fs.rename(temporary, indexFile);
 }
 
 function sameSourceObservation(candidate: TrendCandidate, post: ScrapedData) {
@@ -117,7 +153,7 @@ export function previousObservation(
   scans: Scan[],
   post: ScrapedData,
 ): TrendCandidate | undefined {
-  return scans
+  const observations = scans
     .flatMap((scan) => scan.candidates)
     .filter(
       (candidate) =>
@@ -129,17 +165,21 @@ export function previousObservation(
         Number.isFinite(Date.parse(candidate.collected_at)) &&
         Date.parse(candidate.collected_at) < Date.parse(post.collected_at),
     )
-    .sort((a, b) => Date.parse(b.collected_at) - Date.parse(a.collected_at))[0];
+    .sort((a, b) => Date.parse(b.collected_at) - Date.parse(a.collected_at));
+  // Prefer a useful interval; retain the latest observation when no hour-old one exists.
+  // A recent decrease must not be hidden by selecting an older, smaller count.
+  if (observations[0]?.views_t1 > post.views_t1) return observations[0];
+  return observations.find((candidate) => Date.parse(post.collected_at) - Date.parse(candidate.collected_at) >= 3600000) || observations[0];
 }
 
-export async function saveScan(scan: Scan) {
-  await fs.mkdir(directory, { recursive: true });
-  const filename = path.join(
-    directory,
-    `scan_${Date.now()}_${randomUUID()}.json`,
-  );
-  await fs.writeFile(`${filename}.tmp`, JSON.stringify(scan, null, 2));
-  await fs.rename(`${filename}.tmp`, filename);
+export function saveScan(scan: Scan) {
+  return serialized(async () => {
+    const current = await indexedCandidates();
+    const filename = path.join(directory, `scan_${Date.now()}_${randomUUID()}.json`);
+    await fs.writeFile(`${filename}.tmp`, JSON.stringify(scan));
+    await fs.rename(`${filename}.tmp`, filename);
+    await writeIndex(mergeScans([scan, { timestamp: "1970-01-01", candidates: current }]));
+  });
 }
 
 export function compareObservation(

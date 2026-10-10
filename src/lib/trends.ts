@@ -3,7 +3,7 @@ import {
   sharesActivityFrame,
   type CategoryEvidence,
 } from "./post-policy";
-import { calculateForecast, type Forecast } from "./forecast";
+import { calculateForecast, predictionDisplay, type PredictionDisplay, type Forecast } from "./forecast";
 import type { TrendCandidate } from "./agent";
 export type Trend = {
   id: string;
@@ -13,6 +13,7 @@ export type Trend = {
   categories: string[];
   before: number | null;
   image: string | null;
+  previewUrl?: string;
   steps: string[];
   collectedAt: string | null;
   baselineAt: string | null;
@@ -25,6 +26,7 @@ export type Trend = {
   url: string | null;
   predictedViews: number | null;
   forecast: Forecast;
+  prediction: PredictionDisplay;
   sourceVerifiedAt: string;
   categoryEvidence: CategoryEvidence[];
   currentViews: number;
@@ -118,6 +120,7 @@ export function normalizeTrends(data: unknown, now = Date.now()): Trend[] {
           item.views_t0 == null
             ? Math.max(0, Number(item.views_t1) || 0)
             : Math.max(0, Number(item.views_t0) || 0),
+        previewUrl: typeof item.preview_key === "string" && /^[a-f0-9]{64}$/.test(item.preview_key) ? `/api/previews?key=${item.preview_key}` : undefined,
         image:
           typeof item.image === "string" && /^https:\/\//.test(item.image)
             ? item.image
@@ -159,6 +162,7 @@ export function normalizeTrends(data: unknown, now = Date.now()): Trend[] {
         url,
         predictedViews: forecast.estimated_total,
         forecast,
+        prediction: predictionDisplay(item.views_t1, forecast),
         sourceVerifiedAt: String(item.source_verified_at),
         categoryEvidence: item.category_evidence,
         currentViews: item.views_t1,

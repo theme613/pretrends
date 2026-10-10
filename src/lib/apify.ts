@@ -110,11 +110,16 @@ export async function scrape(
   hashtags: string[],
   limit = 300,
   knownPosts: ScrapedData[] = [],
+  options: { maxChargeUsd?: number } = {},
 ): Promise<{
   posts: ScrapedData[];
   verifications: Verification[];
   run_id: string;
+  warnings: string[];
+  scrape_ms: number;
 }> {
+  const startedAt = Date.now();
+  const maxCharge = options.maxChargeUsd ?? 1;
   const actor =
     platform === "Instagram"
       ? "apify~instagram-scraper"
@@ -130,7 +135,7 @@ export async function scrape(
           ],
           resultsType: "reels",
           resultsLimit: hashtags.length
-            ? Math.ceil(limit / hashtags.length)
+            ? Math.max(1, Math.floor((limit - knownPosts.length) / hashtags.length))
             : 1,
         }
       : {
@@ -170,7 +175,7 @@ export async function scrape(
     return response.json();
   }
   const started = await call(
-    `acts/${actor}/runs?timeout=480&maxTotalChargeUsd=1&waitForFinish=0`,
+    `acts/${actor}/runs?timeout=480&maxTotalChargeUsd=${maxCharge}&waitForFinish=0`,
     {
       method: "POST",
       body: JSON.stringify(input),
@@ -190,11 +195,19 @@ export async function scrape(
     throw new Error(
       `${platform}: Scraper ${String(run.status).toLowerCase()}. Check the run and your credits in Apify.`,
     );
-  const items: unknown = await call(
-    `datasets/${run.defaultDatasetId}/items?clean=true&limit=${limit}`,
-  );
-  if (!Array.isArray(items))
-    throw new Error(`${platform}: Apify returned an unexpected response.`);
+  // Read every raw row, including errors. Filtered pagination can skip rows and
+  // falsely label known posts as missing.
+  const items: unknown[] = [];
+  const pageSize = 100;
+  for (let offset = 0; ; offset += pageSize) {
+    const page: unknown = await call(
+      `datasets/${run.defaultDatasetId}/items?clean=false&offset=${offset}&limit=${pageSize}`,
+    );
+    if (!Array.isArray(page)) throw new Error(`${platform}: Apify returned an unexpected response.`);
+    items.push(...page);
+    if (page.length < pageSize) break;
+    if (items.length >= 10000) throw new Error(`${platform}: Dataset exceeded the safe read limit; availability is uncertain.`);
+  }
   const checkedAt = new Date().toISOString();
   const posts = items.flatMap((item) => {
     const post = parsePost(object(item), platform);
@@ -249,5 +262,8 @@ export async function scrape(
             : "unverified",
     };
   });
-  return { posts, verifications, run_id: String(run.id) };
+  const warnings: string[] = [];
+  if (Number(run.usageTotalUsd) >= maxCharge * 0.95 || /charge|budget|cost limit/i.test(String(run.statusMessage || "")))
+    warnings.push(`${platform}: Scraper reached its charge limit; fewer posts may be available.`);
+  return { posts, verifications, run_id: String(run.id), warnings, scrape_ms: Date.now() - startedAt };
 }

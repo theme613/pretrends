@@ -17,7 +17,6 @@ import {
   RefreshCw,
   Search,
   Sparkles,
-  TrendingUp,
   X,
 } from "lucide-react";
 import {
@@ -28,7 +27,6 @@ import {
 } from "@/components/ui/dialog";
 import {
   categories,
-  formatCount,
   growth,
   matchesCategories,
   matchesCategory,
@@ -36,7 +34,8 @@ import {
   starterIdea,
   type Trend,
 } from "@/lib/trends";
-import { forecastMessage } from "@/lib/forecast";
+import { PredictionViews } from "./prediction-views";
+import { sameBatchFilters, type RefreshBatch } from "@/lib/refresh-batch";
 import "./trend-explorer.css";
 function FilterMenu({
   label,
@@ -83,48 +82,65 @@ function FilterMenu({
     </DropdownMenu.Root>
   );
 }
-function TrendArtwork({
-  trend,
-  eager = false,
-}: {
-  trend: Trend;
-  eager?: boolean;
+// Limit preview recovery requests across cards and the open dialog.
+let previewRequests = 0;
+const previewWaiters: (() => void)[] = [];
+const previewBlobs = new Map<string, Blob>();
+async function previewSlot(eager: boolean) {
+  if (previewRequests >= 3) await new Promise<void>((resolve) => eager ? previewWaiters.unshift(resolve) : previewWaiters.push(resolve));
+  else previewRequests++;
+  return () => { const next = previewWaiters.shift(); if (next) next(); else previewRequests--; };
+}
+function TrendArtwork({ trend, eager = false, onOpen }: {
+  trend: Trend; eager?: boolean; onOpen?: (button: HTMLButtonElement) => void;
 }) {
-  const [failedImage, setFailedImage] = useState<string | null>(null);
-  const [loadedImage, setLoadedImage] = useState<string | null>(null);
-  if (trend.image && failedImage !== trend.image)
-    return (
-      <div className="trend-art" aria-busy={loadedImage !== trend.image}>
-        {loadedImage !== trend.image && (
-          <span className="preview-loading">Loading preview…</span>
-        )}
-        {/* Remote post thumbnails come from the scraper; fall back to category artwork if they expire. */}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={trend.image}
-          alt={trend.title}
-          loading={eager ? "eager" : "lazy"}
-          decoding="async"
-          referrerPolicy="no-referrer"
-          onLoad={() => setLoadedImage(trend.image)}
-          onError={() => setFailedImage(trend.image)}
-          style={{
-            position: "absolute",
-            inset: 0,
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-            opacity: loadedImage === trend.image ? 1 : 0,
-          }}
-        />
-      </div>
-    );
-  return (
-    <div className="trend-art art-unavailable">
-      <span>Preview unavailable</span>
-      <small>Open details to watch the original video.</small>
-    </div>
-  );
+  const container = useRef<HTMLDivElement>(null);
+  const [attempt, setAttempt] = useState(0);
+  const [image, setImage] = useState("");
+  const [failed, setFailed] = useState(false);
+  const source = trend.previewUrl || trend.image;
+  useEffect(() => {
+    const controller = new AbortController();
+    let objectUrl = "", started = false;
+    async function load() {
+      if (started) return;
+      started = true;
+      setImage(""); setFailed(false);
+      if (!source) { setFailed(true); return; }
+      const cached = previewBlobs.get(source);
+      if (cached) { objectUrl = URL.createObjectURL(cached); setImage(objectUrl); return; }
+      const release = await previewSlot(eager);
+      try {
+        if (controller.signal.aborted) return;
+        const response = await fetch(source, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(60000)]) });
+        if (!response.ok) throw new Error("Preview unavailable");
+        const blob = await response.blob();
+        if (!blob.type.startsWith("image/")) throw new Error("Invalid preview");
+        if (!controller.signal.aborted) {
+          if (previewBlobs.size >= 100) previewBlobs.delete(previewBlobs.keys().next().value!);
+          previewBlobs.set(source, blob);
+          objectUrl = URL.createObjectURL(blob); setImage(objectUrl);
+        }
+      } catch { if (!controller.signal.aborted) setFailed(true); }
+      finally { release(); }
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) { observer.disconnect(); void load(); }
+    }, { rootMargin: "200px" });
+    if (eager) void load(); else if (container.current) observer.observe(container.current);
+    return () => { controller.abort(); observer.disconnect(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [source, attempt, eager]);
+  const artwork = image && !failed ? (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={image} alt={trend.title} onError={() => { if (source) previewBlobs.delete(source); setFailed(true); }} />
+  ) : <span className="preview-loading">{failed ? "Preview could not load" : "Loading preview…"}</span>;
+  return <div ref={container} className="trend-art" aria-busy={!image && !failed}>
+    {onOpen ? <button className="preview-open" aria-label={`Open details for ${trend.title}`} aria-haspopup="dialog" onClick={(event) => onOpen(event.currentTarget)}>{artwork}</button> : artwork}
+    {failed && <div className="preview-recovery">
+      <button onClick={() => setAttempt((value) => value + 1)}>Retry preview</button>
+      {trend.url && <a href={trend.url} target="_blank" rel="noreferrer">Watch original</a>}
+    </div>}
+  </div>;
 }
 export default function TrendExplorer({
   initialTrends,
@@ -156,12 +172,7 @@ export default function TrendExplorer({
               Date.now(),
           ),
         );
-        setSelected((current) =>
-          current &&
-          Date.parse(current.sourceVerifiedAt) + SOURCE_MAX_AGE_MS <= Date.now()
-            ? null
-            : current,
-        );
+
       },
       Math.max(0, expiresAt - Date.now() + 1),
     );
@@ -171,9 +182,13 @@ export default function TrendExplorer({
   const [business, setBusiness] = useState("");
   const [caption, setCaption] = useState("");
   const [copied, setCopied] = useState(false);
-  const [visibleCount, setVisibleCount] = useState(24);
-  const [refreshing, setRefreshing] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(12);
+  const [refreshBatch, setRefreshBatch] = useState<RefreshBatch | null>(null);
   const [message, setMessage] = useState("");
+  const activeFilters = useRef({ categories: selectedCategories, platform, query });
+  useEffect(() => {
+    activeFilters.current = { categories: selectedCategories, platform, query };
+  }, [selectedCategories, platform, query]);
   const filtered = trends
     .filter(
       (trend) =>
@@ -188,7 +203,13 @@ export default function TrendExplorer({
         return (growth(b) ?? -Infinity) - (growth(a) ?? -Infinity);
       return b.score - a.score;
     });
-  const visible = filtered.slice(0, visibleCount);
+  const batchIds = new Set(refreshBatch?.ids || []);
+  const batchPosts = filtered.filter((post) => batchIds.has(post.id));
+  const remainingPosts = filtered.filter((post) => !batchIds.has(post.id));
+  const visible = refreshBatch
+    ? [...batchPosts, ...remainingPosts.slice(0, Math.max(0, visibleCount - 12))]
+    : filtered.slice(0, visibleCount);
+  const selectedAvailable = selected !== null && trends.some((post) => post.id === selected.id);
   function toggleSave(trend: Trend) {
     const wasSaved = saved.includes(trend.id);
     setSaved((previous) =>
@@ -209,13 +230,15 @@ export default function TrendExplorer({
     setCopied(false);
   }
   function resetFilters() {
+    setRefreshBatch(null);
     setSelectedCategories([]);
     setQuery("");
     setPlatform("all");
-    setVisibleCount(24);
+    setVisibleCount(12);
   }
   function toggleCategory(id: string) {
-    setVisibleCount(24);
+    setRefreshBatch(null);
+    setVisibleCount(12);
     if (id === "all") {
       setSelectedCategories([]);
       return;
@@ -228,85 +251,86 @@ export default function TrendExplorer({
           : previous,
     );
   }
-  async function refresh() {
-    setRefreshing(true);
-    try {
-      const response = await fetch("/api/trends", {
-        cache: "no-store",
-      });
-      if (!response.ok) throw new Error("Could not load trends");
-      setTrends(normalizeTrends(await response.json()));
-      setMessage(
-        "Ideas refreshed from the latest stored data. This does not run a live scan.",
-      );
-    } catch {
-      setMessage(
-        "Could not refresh ideas. Your current ideas are still available. Please try again.",
-      );
-    } finally {
-      setRefreshing(false);
-    }
-  }
-
   const [scanning, setScanning] = useState(false);
+  const pollController = useRef<AbortController | null>(null);
+  useEffect(() => () => pollController.current?.abort(), []);
+  function applyCollection(data: unknown) {
+    const next = [...new Map(normalizeTrends(data).map((post) => [post.id, post])).values()];
+    setTrends(next);
+    setSelected((current) => current ? next.find((post) => post.id === current.id) || current : null);
+  }
   async function runLiveScan() {
+    if (pollController.current) return;
+    const controller = new AbortController();
+    pollController.current = controller;
+    const requestedFilters = { categories: [...selectedCategories], platform };
     setScanning(true);
-    setMessage(
-      "Collecting posts across several topics and preparing your ideas. This can take several minutes…",
-    );
+    setMessage("Finding fresh ideas…");
+    const delayed = "Still finding ideas. You can keep browsing.";
+    const slowTimer = setTimeout(() => setMessage(delayed), 40000);
+    // Visibility changes wake the existing poll; they do not start another scan.
+    const waitForPoll = () => new Promise<void>((resolve, reject) => {
+      const cleanup = () => { clearTimeout(timer); document.removeEventListener("visibilitychange", wake); controller.signal.removeEventListener("abort", abort); };
+      const wake = () => { if (document.visibilityState === "visible") { cleanup(); resolve(); } };
+      const abort = () => { cleanup(); reject(new DOMException("Aborted", "AbortError")); };
+      const timer = setTimeout(() => { cleanup(); resolve(); }, document.visibilityState === "hidden" ? 10000 : 2000);
+      document.addEventListener("visibilitychange", wake);
+      controller.signal.addEventListener("abort", abort, { once: true });
+      if (controller.signal.aborted) abort();
+    });
+    const started = Date.now();
+    const requestSignal = () => AbortSignal.any([controller.signal, AbortSignal.timeout(20000)]);
     try {
       const response = await fetch("/api/scan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ categories: selectedCategories, platform }),
-        cache: "no-store",
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ categories: selectedCategories, platform, mode: "refresh" }),
+        cache: "no-store", signal: requestSignal(),
       });
       let result = await response.json();
-      if (!response.ok)
-        throw new Error(result.error || "Scan failed. Please try again.");
+      if (response.status === 409) { setMessage(result.error); return; }
+      if (!response.ok) throw new Error(result.error || "Scan failed. Please try again.");
       if (response.status === 202) {
         const id = result.id;
+        let revision = -1;
         while (true) {
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-          const progressResponse = await fetch(
-            `/api/scan?id=${encodeURIComponent(id)}`,
-            { cache: "no-store" },
-          );
+          if (Date.now() - started > 15 * 60000) throw new Error("Scan timed out.");
+          const progressResponse = await fetch(`/api/scan?id=${encodeURIComponent(id)}&since=${revision}`, { cache: "no-store", signal: requestSignal() });
           const progress = await progressResponse.json();
-          if (!progressResponse.ok || progress.status === "failed")
-            throw new Error(progress.error || "Scan failed. Please try again.");
-          if (progress.status === "complete") {
-            result = progress.result;
-            break;
-          }
-          setMessage(
-            progress.total
-              ? `${progress.stage}: ${progress.processed} of ${progress.total} posts…`
-              : progress.stage,
-          );
+          if (progress.data) applyCollection(progress.data.candidates);
+          revision = progress.revision ?? revision;
+          if (!progressResponse.ok || progress.status === "failed") throw new Error(progress.error || "Scan failed. Please try again.");
+          if (progress.status === "complete") { result = progress.result; break; }
+          setMessage(Date.now() - started >= 40000 ? delayed : "Finding fresh ideas…");
+          await waitForPoll();
         }
       }
-      setTrends(normalizeTrends(result.data.candidates));
-      setVisibleCount(24);
-      setMessage(
-        `Collected ${result.scraped_count} real posts; ${result.verified_count ?? 0} passed visual checks. ${(result.warnings || []).join(" ")}`,
+      applyCollection(result.data.candidates);
+      const filters = activeFilters.current;
+      const hasMatches = normalizeTrends(result.data.candidates).some((post) =>
+        matchesCategories(post, filters.categories) &&
+        (filters.platform === "all" || post.platform === filters.platform) &&
+        `${post.title} ${post.reason} ${post.creator}`.toLowerCase().includes(filters.query.toLowerCase().trim()),
       );
-    } catch (error) {
-      try {
-        const latest = await fetch("/api/trends", { cache: "no-store" });
-        if (latest.ok) setTrends(normalizeTrends(await latest.json()));
-        else setTrends([]);
-      } catch {
-        setTrends([]);
+      if (result.batch && sameBatchFilters(requestedFilters, filters)) {
+        setRefreshBatch(result.batch);
+        setVisibleCount(12);
+        const batch: RefreshBatch = result.batch;
+        setMessage(`${batch.ids.length} ideas ready · ${batch.fresh_count} fresh, ${batch.reused_count} saved.${batch.ids.length < 12 ? " Fewer than 12 verified matches are available." : ""}`);
+      } else {
+        setMessage(hasMatches ? "Ideas updated. Your current filters are applied." : "No matching ideas found. Try another topic.");
       }
+    } catch {
+      if (controller.signal.aborted) return;
+      try {
+        const latest = await fetch("/api/trends", { cache: "no-store", signal: requestSignal() });
+        if (latest.ok) applyCollection(await latest.json());
 
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : "Could not connect. Please try again.",
-      );
+      } catch { /* Keep the current verified ideas available if the read fails. */ }
+      if (!controller.signal.aborted) setMessage("Could not update ideas. Please try again.");
     } finally {
-      setScanning(false);
+      clearTimeout(slowTimer);
+      if (pollController.current === controller) pollController.current = null;
+      if (!controller.signal.aborted) setScanning(false);
     }
   }
   async function copyBrief() {
@@ -343,7 +367,7 @@ export default function TrendExplorer({
 
       <main className="page-width">
         <section
-          id="ideas"
+          id="ideas" tabIndex={-1}
           className="ideas-section"
           aria-labelledby="ideas-heading"
         >
@@ -359,20 +383,12 @@ export default function TrendExplorer({
             </div>
             <div className="collection-actions">
               <button
-                className="collection-button"
-                onClick={refresh}
-                disabled={refreshing || scanning}
-              >
-                <RefreshCw size={14} className={refreshing ? "spinning" : ""} />
-                {refreshing ? "Refreshing…" : "Refresh ideas"}
-              </button>
-              <button
                 className="collection-button collection-button-primary"
-                onClick={runLiveScan}
-                disabled={scanning || refreshing}
+                onClick={() => runLiveScan()}
+                disabled={scanning}
               >
                 <RefreshCw size={14} className={scanning ? "spinning" : ""} />
-                {scanning ? "Scanning…" : "Find fresh trends"}
+                {scanning ? "Finding ideas…" : "Find fresh ideas"}
               </button>
             </div>
           </div>
@@ -422,7 +438,7 @@ export default function TrendExplorer({
                 value={query}
                 onChange={(event) => {
                   setQuery(event.target.value);
-                  setVisibleCount(24);
+                  setVisibleCount(12);
                 }}
               />
               {query && (
@@ -442,8 +458,9 @@ export default function TrendExplorer({
                   ).map((name) => ({ value: name, label: name })),
                 ]}
                 onChange={(value) => {
+                  setRefreshBatch(null);
                   setPlatform(value);
-                  setVisibleCount(24);
+                  setVisibleCount(12);
                 }}
               />
               <FilterMenu
@@ -483,7 +500,7 @@ export default function TrendExplorer({
               return (
                 <article className="trend-card" key={trend.id}>
                   <div className="card-image">
-                    <TrendArtwork trend={trend} />
+                    <TrendArtwork trend={trend} onOpen={(button) => openIdea(trend, button)} />
                     <span className="platform-tag">
                       {trend.platform === "TikTok"
                         ? "♪"
@@ -549,37 +566,27 @@ export default function TrendExplorer({
                         {trend.title}
                       </button>
                     </h3>
+                    <PredictionViews trend={trend} compact />
                     <div className="card-metrics">
-                      <span
-                        className={`growth-value ${percent !== null && percent < 0 ? "growth-negative" : ""}`}
-                      >
+                      <span className={`growth-value ${percent !== null && percent < 0 ? "growth-negative" : ""}`}>
                         <ArrowUpRight size={14} />
-                        {percent === null
-                          ? "Baseline saved"
-                          : `${percent > 0 ? "+" : ""}${percent.toLocaleString()}%`}{" "}
-                        {percent !== null && <span>views</span>}
+                        {percent === null ? "First observation" : `${percent > 0 ? "+" : ""}${percent.toLocaleString()}% measured growth`}
                       </span>
-                      <span>
-                        {formatCount(trend.after ?? trend.before)} views{" "}
-                        <span className="metric-dot">·</span> Stored
-                      </span>
+                      <span>{refreshBatch && batchIds.has(trend.id) ? "Refresh batch" : "Stored"}</span>
                     </div>
-                    <span className="card-action" aria-hidden="true">
+                    <button className="card-action" aria-haspopup="dialog" onClick={(event) => openIdea(trend, event.currentTarget)}>
                       View trend <ArrowUpRight size={17} />
-                    </span>
+                    </button>
                   </div>
                 </article>
               );
             })}
           </div>
-          {filtered.length === 0 && (
+          {visible.length === 0 && (
             <div className="empty-state">
               <Bookmark size={30} strokeWidth={1.2} />
-              <h3>No verified videos match yet.</h3>
-              <p>
-                Run a scan to verify real videos, or try fewer categories.
-                Unconfirmed and expired posts stay hidden.
-              </p>
+              <h3>No matching ideas found.</h3>
+              <p>Try another topic.</p>
               <button
                 className="primary-button"
                 onClick={() => {
@@ -594,9 +601,9 @@ export default function TrendExplorer({
             <div className="load-more">
               <button
                 className="outline-button"
-                onClick={() => setVisibleCount((previous) => previous + 24)}
+                onClick={() => setVisibleCount((previous) => previous + 12)}
               >
-                Show next {Math.min(24, filtered.length - visible.length)} ideas{" "}
+                Show next {Math.min(12, filtered.length - visible.length)} ideas{" "}
                 <ChevronDown size={15} />
               </button>
               <span>
@@ -694,7 +701,8 @@ export default function TrendExplorer({
           overlayClassName="trend-detail-overlay"
           onCloseAutoFocus={(event) => {
             event.preventDefault();
-            detailTrigger.current?.focus({ preventScroll: true });
+            if (detailTrigger.current?.isConnected) detailTrigger.current.focus({ preventScroll: true });
+            else document.getElementById("ideas")?.focus({ preventScroll: true });
           }}
         >
           {selected && (
@@ -725,94 +733,23 @@ export default function TrendExplorer({
                     {selected.platform}
                   </DialogDescription>
                 </header>
-                <div
-                  className={`evidence-panel evidence-panel--${selected.score >= 80 ? "strong" : selected.score >= 50 ? "medium" : "weak"}`}
-                >
-                  <div className="evidence-title">
-                    <Radar size={16} />
-                    <strong>Behind the signal</strong>
-                    <span>{selected.score}/100 · AI estimate</span>
-                  </div>
-                  <div className="view-comparison">
-                    <div>
-                      <span>
-                        {selected.hasBaseline
-                          ? "Earlier views"
-                          : "Starting views"}
-                      </span>
-                      <strong>{formatCount(selected.before)}</strong>
-                    </div>
-                    <ArrowRight size={20} />
-                    <div>
-                      <span>Current views</span>
-                      <strong>{formatCount(selected.currentViews)}</strong>
-                    </div>
-                    <span className="growth-pill">
-                      {growth(selected) === null
-                        ? selected.hasBaseline
-                          ? "No growth rate"
-                          : "Baseline saved"
-                        : `${(growth(selected) ?? 0) > 0 ? "+" : ""}${growth(selected)}%`}
-                    </span>
-                  </div>
-
-                  <span className="evidence-source">
-                    {selected.baselineAt && selected.collectedAt
-                      ? `${new Date(selected.baselineAt).toLocaleString()} → ${new Date(selected.collectedAt).toLocaleString()}`
-                      : "Starting views saved. Fetch again later to measure growth."}
-                  </span>
-                  <span className="evidence-source">
-                    Last verified:{" "}
-                    {new Date(selected.sourceVerifiedAt).toLocaleString()}
-                  </span>
+                <section className="views-panel" aria-label="Video views">
+                  {!selectedAvailable && <p role="status">This post is no longer available in the current results. You can still copy your brief.</p>}
+                  {selectedAvailable && <>
+                  <PredictionViews trend={selected} />
+                  <p className="views-checked">
+                    Last checked: {new Date(selected.sourceVerifiedAt).toLocaleString()}
+                  </p>
+                  </>}
                   {selected.url && (
-                    <a
-                      className="detail-video-link"
-                      href={selected.url}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
+                    <a className="detail-video-link" href={selected.url} target="_blank" rel="noreferrer">
                       Watch original video <ExternalLink size={15} />
                     </a>
-                  )}
-                </div>
-                <section
-                  className="prediction-panel"
-                  aria-label="View forecast"
-                >
-                  <div className="prediction-title">
-                    <TrendingUp size={16} />
-                    <strong>Estimated total views in 3 days</strong>
-                    {selected.predictedViews !== null && (
-                      <span className="prediction-estimate">
-                        {formatCount(selected.predictedViews)} views
-                      </span>
-                    )}
-                  </div>
-                  <p className="forecast-note">
-                    {forecastMessage(selected.forecast.status)}
-                  </p>
-                  {selected.forecast.status === "ready" && (
-                    <p className="forecast-note">
-                      Based on {formatCount(selected.forecast.views_per_hour)}{" "}
-                      views gained per hour between your last two fetches.
-                      Target:{" "}
-                      {new Date(selected.forecast.target_at!).toLocaleString()}.
-                    </p>
                   )}
                 </section>
                 <section className="detail-explanation">
                   <h3>Why this trend matters</h3>
-                  <p>
-                    {selected.reason}{" "}
-                    {selected.after !== null &&
-                    selected.before !== null &&
-                    selected.after > selected.before
-                      ? `Views increased from ${formatCount(selected.before)} to ${formatCount(selected.after)} in the available records. This suggests growing interest, but it is too early to know how long it will last.`
-                      : !selected.hasBaseline
-                        ? "The starting view count is saved. Growth will be measured after the next fetch."
-                        : "Check whether this idea fits your customers."}
-                  </p>
+                  <p>{selected.reason}</p>
                 </section>
                 <section className="detail-plan">
                   <div className="detail-plan-heading">

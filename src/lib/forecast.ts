@@ -75,3 +75,16 @@ export function forecastMessage(status: Forecast["status"]) {
       "The recorded count decreased, so a growth estimate is unavailable.",
   }[status];
 }
+
+// Display-only simulation. Never use this value as an observation or ranking signal.
+export type PredictionDisplay = {
+  method: "observed_growth" | "demo_growth";
+  estimated_total: number;
+};
+export function predictionDisplay(currentViews: number, forecast: Forecast): PredictionDisplay {
+  if (forecast.status === "ready" && forecast.estimated_total !== null &&
+      Number.isSafeInteger(forecast.estimated_total) && forecast.estimated_total >= 0) {
+    return { method: "observed_growth", estimated_total: forecast.estimated_total };
+  }
+  return { method: "demo_growth", estimated_total: Math.round(currentViews * 1.25) };
+}

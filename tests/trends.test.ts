@@ -412,3 +412,30 @@ test("API returns only eligible source posts and matching category counts", asyn
     ),
   );
 });
+
+test("display predictions keep real forecasts separate from labelled simulations", async () => {
+  const { predictionDisplay } = await import("../src/lib/forecast");
+  const real = calculateForecast(post());
+  assert.deepEqual(predictionDisplay(1240, real), { method: "observed_growth", estimated_total: 9880 });
+  for (const status of ["first_observation", "too_soon", "invalid_observations", "decreasing_views"] as const) {
+    assert.deepEqual(predictionDisplay(101, { ...real, status, estimated_total: null }), { method: "demo_growth", estimated_total: 126 });
+  }
+  assert.equal(predictionDisplay(0, { ...real, status: "first_observation" }).estimated_total, 0);
+  const source = post({ has_baseline: false });
+  const normalized = normalizeTrends([source], now)[0];
+  assert.equal(normalized.predictedViews, null);
+  assert.equal(normalized.prediction.estimated_total, 1550);
+  assert.equal(normalized.currentViews, 1240);
+  assert.equal(normalized.score, normalizeTrends([post()], now)[0].score);
+});
+test("frequent refreshes keep the latest hour-old baseline without hiding count decreases", () => {
+  const old = post({ collected_at: "2026-10-10T14:00:00Z", views_t1: 1000 });
+  const recent = post({ collected_at: "2026-10-10T15:50:00Z", views_t1: 1200 });
+  const scans = [{ timestamp: recent.collected_at, candidates: [old, recent] }];
+  const previous = previousObservation(scans, post());
+  assert.equal(previous, old);
+  assert.equal(calculateForecast(compareObservation(post(), previous)).status, "ready");
+  assert.equal(previousObservation(scans, post({ views_t1: 1100 })), recent);
+  assert.equal(calculateForecast(compareObservation(post({ views_t1: 1100 }), recent)).status, "decreasing_views");
+  assert.equal(previousObservation([{ timestamp: recent.collected_at, candidates: [recent] }], post()), recent);
+});
