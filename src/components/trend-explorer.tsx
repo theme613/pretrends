@@ -38,7 +38,23 @@ import {
 import "./trend-explorer.css";
 const featuredIds = ["t16", "t7", "t26", "t24", "t10", "t29"];
 function TrendArtwork({ trend }: { trend: Trend }) {
+  const [failedImage, setFailedImage] = useState<string | null>(null);
   const category = topic(trend).id;
+  if (trend.image && failedImage !== trend.image)
+    return (
+      <div className="trend-art">
+        {/* Remote post thumbnails come from the scraper; fall back to category artwork if they expire. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={trend.image}
+          alt={trend.title}
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={() => setFailedImage(trend.image)}
+          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+        />
+      </div>
+    );
   if (category === "fashion")
     return (
       <div className="trend-art art-fashion" aria-hidden="true">
@@ -210,7 +226,7 @@ export default function TrendExplorer({
   const [business, setBusiness] = useState("");
   const [caption, setCaption] = useState("");
   const [copied, setCopied] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(24);
   const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState("");
   const filtered = trends
@@ -233,7 +249,7 @@ export default function TrendExplorer({
         b.score - a.score
       );
     });
-  const visible = expanded ? filtered : filtered.slice(0, 6);
+  const visible = filtered.slice(0, visibleCount);
   const hasDemo = trends.some((trend) => trend.demo);
   function toggleSave(trend: Trend) {
     const wasSaved = saved.includes(trend.id);
@@ -257,10 +273,10 @@ export default function TrendExplorer({
     setSelectedCategories([]);
     setQuery("");
     setPlatform("all");
-    setExpanded(false);
+    setVisibleCount(24);
   }
   function toggleCategory(id: string) {
-    setExpanded(false);
+    setVisibleCount(24);
     if (id === "all") {
       setSelectedCategories([]);
       return;
@@ -296,14 +312,52 @@ export default function TrendExplorer({
   const [scanning, setScanning] = useState(false);
   async function runLiveScan() {
     setScanning(true);
-    setMessage("Running live Apify scan... This will take about 15 seconds.");
+    setMessage(
+      "Collecting posts across several topics and preparing your ideas. This can take several minutes…",
+    );
     try {
-      const response = await fetch("/api/scan", { method: "POST", cache: "no-store" });
-      if (!response.ok) throw new Error("Scan failed");
-      await refresh();
-      setMessage("Live scan complete! Apify fetched new TikTok & Instagram posts.");
-    } catch {
-      setMessage("Live scan failed. Please check your Apify token.");
+      const response = await fetch("/api/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ categories: selectedCategories, platform }),
+        cache: "no-store",
+      });
+      let result = await response.json();
+      if (!response.ok)
+        throw new Error(result.error || "Scan failed. Please try again.");
+      if (response.status === 202) {
+        const id = result.id;
+        while (true) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          const progressResponse = await fetch(
+            `/api/scan?id=${encodeURIComponent(id)}`,
+            { cache: "no-store" },
+          );
+          const progress = await progressResponse.json();
+          if (!progressResponse.ok || progress.status === "failed")
+            throw new Error(progress.error || "Scan failed. Please try again.");
+          if (progress.status === "complete") {
+            result = progress.result;
+            break;
+          }
+          setMessage(
+            progress.total
+              ? `${progress.stage}: ${progress.processed} of ${progress.total} posts…`
+              : progress.stage,
+          );
+        }
+      }
+      setTrends(normalizeTrends(result.data.candidates));
+      setVisibleCount(24);
+      setMessage(
+        `Found ${result.scraped_count} posts. ${(result.warnings || []).join(" ")}`,
+      );
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Could not connect. Please try again.",
+      );
     } finally {
       setScanning(false);
     }
@@ -359,7 +413,7 @@ export default function TrendExplorer({
             <button
               className="refresh-button"
               onClick={refresh}
-              disabled={refreshing}
+              disabled={refreshing || scanning}
             >
               <RefreshCw size={14} className={refreshing ? "spinning" : ""} />
               {refreshing ? "Refreshing…" : "Refresh ideas"}
@@ -368,10 +422,15 @@ export default function TrendExplorer({
               className="refresh-button"
               onClick={runLiveScan}
               disabled={scanning || refreshing}
-              style={{ marginLeft: "8px", background: "#4f46e5", color: "white", borderColor: "#4f46e5" }}
+              style={{
+                marginLeft: "8px",
+                background: "#77628e",
+                color: "white",
+                borderColor: "#77628e",
+              }}
             >
               <RefreshCw size={14} className={scanning ? "spinning" : ""} />
-              {scanning ? "Scraping Apify..." : "Trigger Live Apify Scan"}
+              {scanning ? "Scanning…" : "Find fresh trends"}
             </button>
           </div>
           <div className="filter-row">
@@ -420,7 +479,7 @@ export default function TrendExplorer({
                 value={query}
                 onChange={(event) => {
                   setQuery(event.target.value);
-                  setExpanded(false);
+                  setVisibleCount(24);
                 }}
               />
               {query && (
@@ -436,7 +495,7 @@ export default function TrendExplorer({
                   value={platform}
                   onChange={(event) => {
                     setPlatform(event.target.value);
-                    setExpanded(false);
+                    setVisibleCount(24);
                   }}
                 >
                   <option value="all">All platforms</option>
@@ -472,7 +531,7 @@ export default function TrendExplorer({
             <span>
               {hasDemo
                 ? "Demo data · Not live predictions"
-                : "Stored signals · Not guaranteed predictions"}
+                : "Real posts · AI suggestions"}
             </span>
           </div>
           {message && (
@@ -537,11 +596,13 @@ export default function TrendExplorer({
                       </span>
                       <span className="signal-badge">
                         <Flame size={12} />
-                        {trend.score >= 80
-                          ? "Strong signal"
-                          : trend.score >= 50
-                            ? "Picking up"
-                            : "Worth a look"}
+                        {!trend.hasBaseline
+                          ? "First observation"
+                          : trend.score >= 80
+                            ? "Strong signal"
+                            : trend.score >= 50
+                              ? "Picking up"
+                              : "Worth a look"}
                       </span>
                     </div>
                     <h3>
@@ -550,11 +611,29 @@ export default function TrendExplorer({
                       </button>
                     </h3>
                     <div className="card-description mt-2 text-sm flex flex-col gap-1.5 p-3 bg-slate-50 border border-slate-100 rounded-md">
-                      <p><span className="font-semibold text-slate-800">Predict:</span> {trend.title}</p>
-                      <p><span className="font-semibold text-slate-800">Why (Y):</span> {trend.reason}</p>
-                      <p className="text-blue-700"><span className="font-semibold">Action (Z):</span> {trend.decision}</p>
+                      <p>
+                        <span className="font-semibold text-slate-800">
+                          Predict:
+                        </span>{" "}
+                        {trend.title}
+                      </p>
+                      <p>
+                        <span className="font-semibold text-slate-800">
+                          Why (Y):
+                        </span>{" "}
+                        {trend.reason}
+                      </p>
+                      <p className="text-blue-700">
+                        <span className="font-semibold">Action (Z):</span>{" "}
+                        {trend.decision}
+                      </p>
                       {trend.url && (
-                        <a href={trend.url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:text-indigo-800 underline font-medium mt-1 inline-flex items-center gap-1 w-max">
+                        <a
+                          href={trend.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-indigo-600 hover:text-indigo-800 underline font-medium mt-1 inline-flex items-center gap-1 w-max"
+                        >
                           ▶ Watch Original Video
                         </a>
                       )}
@@ -565,12 +644,12 @@ export default function TrendExplorer({
                       >
                         <ArrowUpRight size={14} />
                         {percent === null
-                          ? "No baseline"
+                          ? "Baseline saved"
                           : `${percent > 0 ? "+" : ""}${percent.toLocaleString()}%`}{" "}
-                        <span>views</span>
+                        <span>{percent === null ? "yet" : "views"}</span>
                       </span>
                       <span>
-                        {formatCount(trend.after)} views{" "}
+                        {formatCount(trend.after ?? trend.before)} views{" "}
                         <span className="metric-dot">·</span>{" "}
                         {trend.demo ? "Sample" : "Stored"}
                       </span>
@@ -579,7 +658,7 @@ export default function TrendExplorer({
                       className="card-action"
                       onClick={() => openIdea(trend)}
                     >
-                      Make it my own <ArrowUpRight size={17} />
+                      View trend <ArrowUpRight size={17} />
                     </button>
                   </div>
                 </article>
@@ -603,17 +682,18 @@ export default function TrendExplorer({
               </button>
             </div>
           )}
-          {filtered.length > 6 && (
+          {visible.length < filtered.length && (
             <div className="load-more">
               <button
                 className="outline-button"
-                onClick={() => setExpanded(!expanded)}
+                onClick={() => setVisibleCount((previous) => previous + 24)}
               >
-                {expanded
-                  ? "Show fewer ideas"
-                  : `Explore ${filtered.length - 6} more ideas`}
-                <ChevronDown size={15} className={expanded ? "rotated" : ""} />
+                Show next {Math.min(24, filtered.length - visible.length)} ideas{" "}
+                <ChevronDown size={15} />
               </button>
+              <span>
+                Showing {visible.length} of {filtered.length} ideas
+              </span>
             </div>
           )}
         </section>
@@ -680,8 +760,8 @@ export default function TrendExplorer({
             </li>
           </ol>
           <div className="honest-note">
-            This demo uses sample trends from the project. Starter briefs are
-            editable templates, not AI-generated predictions. Saved ideas stay
+            Browse saved posts or find fresh trends. Live posts include AI
+            guidance when available; sample ideas are labelled. Saved ideas stay
             for this session.
           </div>
           <a
@@ -702,121 +782,198 @@ export default function TrendExplorer({
           if (!open) setSelected(null);
         }}
       >
-        <DialogContent className="idea-dialog">
+        <DialogContent className="idea-dialog trend-detail-dialog">
           {selected && (
             <>
-              <span className="eyebrow">
-                {topic(selected).label.toUpperCase()} ·{" "}
-                {selected.demo ? "SAMPLE TREND" : "STORED TREND"}
-              </span>
-              <DialogTitle>{selected.title}</DialogTitle>
-              <DialogDescription>
-                Make this inspiration work for your business.
-              </DialogDescription>
-              <div className="evidence-panel">
-                <div className="evidence-title">
-                  <Radar size={16} />
-                  <strong>Behind the signal</strong>
-                  <span>{selected.score}/100 score</span>
-                </div>
-                <div className="view-comparison">
-                  <div>
-                    <span>Earlier views</span>
-                    <strong>{formatCount(selected.before)}</strong>
+              <div className="detail-cover">
+                <TrendArtwork trend={selected} />
+                <span className="detail-cover-label">
+                  {selected.platform} ·{" "}
+                  {selected.demo ? "Sample trend" : "Stored trend"}
+                </span>
+              </div>
+              <div className="detail-content">
+                <header className="detail-heading">
+                  <div className="detail-categories">
+                    {categories
+                      .filter(
+                        (category) =>
+                          category.id !== "all" &&
+                          matchesCategory(selected, category.id),
+                      )
+                      .map((category) => (
+                        <span key={category.id}>{category.label}</span>
+                      ))}
                   </div>
-                  <ArrowRight size={20} />
-                  <div>
-                    <span>Later views</span>
-                    <strong>{formatCount(selected.after)}</strong>
+                  <DialogTitle>{selected.title}</DialogTitle>
+                  <DialogDescription>
+                    By @{selected.creator.replace(/^@/, "")} ·{" "}
+                    {selected.platform}
+                  </DialogDescription>
+                </header>
+                <div className="evidence-panel">
+                  <div className="evidence-title">
+                    <Radar size={16} />
+                    <strong>Behind the signal</strong>
+                    <span>{selected.score}/100 · AI estimate</span>
                   </div>
-                  <span className="growth-pill">
-                    {growth(selected) === null
-                      ? "No baseline"
-                      : `${(growth(selected) ?? 0) > 0 ? "+" : ""}${growth(selected)}%`}
+                  <div className="view-comparison">
+                    <div>
+                      <span>Earlier views</span>
+                      <strong>{formatCount(selected.before)}</strong>
+                    </div>
+                    <ArrowRight size={20} />
+                    <div>
+                      <span>Later views</span>
+                      <strong
+                        className={
+                          selected.after === null ? "waiting-views" : undefined
+                        }
+                      >
+                        {selected.after === null
+                          ? "Waiting for next fetch"
+                          : formatCount(selected.after)}
+                      </strong>
+                    </div>
+                    <span className="growth-pill">
+                      {growth(selected) === null
+                        ? selected.hasBaseline
+                          ? "No growth rate"
+                          : "Baseline saved"
+                        : `${(growth(selected) ?? 0) > 0 ? "+" : ""}${growth(selected)}%`}
+                    </span>
+                  </div>
+
+                  <span className="evidence-source">
+                    {selected.baselineAt && selected.collectedAt
+                      ? `${new Date(selected.baselineAt).toLocaleString()} → ${new Date(selected.collectedAt).toLocaleString()}`
+                      : selected.demo
+                        ? "Sample view counts · Collection interval unavailable"
+                        : "Starting views saved. Fetch this post again to compare the new views with this count."}
                   </span>
-                </div>
-                <div className="flex flex-col gap-2 p-4 bg-slate-50 border border-slate-200 rounded-lg text-sm mt-4">
-                  <p><span className="font-bold text-slate-800">Our AI Predicts:</span> {selected.title}</p>
-                  <p><span className="font-bold text-slate-800">Why (Y):</span> {selected.reason}</p>
-                  <p className="text-blue-800"><span className="font-bold">Action (Z):</span> {selected.decision}</p>
                   {selected.url && (
-                    <a href={selected.url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:text-indigo-800 underline font-bold mt-2 inline-flex items-center gap-1 w-max">
-                      ▶ Watch Original Post
+                    <a
+                      className="research-link"
+                      href={selected.url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      View original source <ExternalLink size={13} />
                     </a>
                   )}
                 </div>
-                <span className="evidence-source">
-                  @{selected.creator} · {selected.platform} · Collection
-                  interval unavailable
-                </span>
-                {selected.url && (
-                  <a
-                    className="research-link"
-                    href={selected.url}
-                    target="_blank"
-                    rel="noreferrer"
+                <section className="detail-explanation">
+                  <h3>Why it’s getting attention</h3>
+                  <p>
+                    {selected.reason}{" "}
+                    {selected.after !== null &&
+                    selected.before !== null &&
+                    selected.after > selected.before
+                      ? `Views increased from ${formatCount(selected.before)} to ${formatCount(selected.after)} in the available records. This suggests growing interest, but it is too early to know how long it will last.`
+                      : !selected.hasBaseline
+                        ? "The starting view count is saved. Growth will be measured after the next fetch."
+                        : "Check whether this idea fits your customers."}
+                  </p>
+                </section>
+                <section className="detail-plan">
+                  <div className="detail-plan-heading">
+                    <Sparkles size={19} />
+                    <div>
+                      <h3>Make this trend your own</h3>
+                      <p>
+                        {selected.decision ||
+                          "Start with one simple post. Here’s how."}
+                      </p>
+                    </div>
+                  </div>
+                  <ol>
+                    {starterIdea(selected, business).steps.map(
+                      (step, index) => (
+                        <li key={step}>
+                          <span className="detail-step-number">
+                            0{index + 1}
+                          </span>
+                          <div>
+                            <h4>
+                              {
+                                [
+                                  "Set up your idea",
+                                  "Bring it to life",
+                                  "Start a conversation",
+                                ][index]
+                              }
+                            </h4>
+                            <p>{step}</p>
+                          </div>
+                        </li>
+                      ),
+                    )}
+                  </ol>
+                </section>
+                <details className="detail-caption">
+                  <summary>
+                    Write your first post <ChevronDown size={16} />
+                  </summary>
+                  <div className="detail-caption-fields">
+                    <div className="brief-header">
+                      <Sparkles size={16} />
+                      <h3>Your starter brief</h3>
+                      <span>Editable template</span>
+                    </div>
+                    <label className="brief-label">
+                      Your business name
+                      <input
+                        value={business}
+                        placeholder="e.g. Luna Café"
+                        maxLength={80}
+                        onChange={(event) => {
+                          setBusiness(event.target.value);
+                          setCaption(
+                            starterIdea(selected, event.target.value).hook,
+                          );
+                          setCopied(false);
+                        }}
+                      />
+                    </label>
+                    <label className="brief-label">
+                      Start your post with…
+                      <textarea
+                        value={caption}
+                        rows={3}
+                        onChange={(event) => {
+                          setCaption(event.target.value);
+                          setCopied(false);
+                        }}
+                      />
+                    </label>
+                  </div>
+                </details>
+                <div className="brief-actions">
+                  <button
+                    className="outline-button"
+                    onClick={() => toggleSave(selected)}
                   >
-                    View original source <ExternalLink size={13} />
-                  </a>
-                )}
+                    <Bookmark
+                      size={15}
+                      fill={
+                        saved.includes(selected.id) ? "currentColor" : "none"
+                      }
+                    />
+                    {saved.includes(selected.id) ? "Saved idea" : "Save idea"}
+                  </button>
+                  <button className="primary-button" onClick={copyBrief}>
+                    {copied ? <Check size={16} /> : <Copy size={16} />}
+                    {copied ? "Brief copied" : "Copy post brief"}
+                  </button>
+                </div>
+                <p className="brief-footnote">
+                  {selected.demo
+                    ? "Sample guidance · Editable ideas, not a live AI prediction."
+                    : selected.aiStatus === "complete"
+                      ? "AI suggestions · Review and adapt them for your business."
+                      : "AI guidance unavailable · These steps are editable templates."}
+                </p>
               </div>
-              <div className="brief-header">
-                <Sparkles size={16} />
-                <h3>Your starter brief</h3>
-                <span>Editable template</span>
-              </div>
-              <label className="brief-label">
-                Your business name
-                <input
-                  value={business}
-                  placeholder="e.g. Luna Café"
-                  maxLength={80}
-                  onChange={(event) => {
-                    setBusiness(event.target.value);
-                    setCaption(starterIdea(selected, event.target.value).hook);
-                    setCopied(false);
-                  }}
-                />
-              </label>
-              <label className="brief-label">
-                Start your post with…
-                <textarea
-                  value={caption}
-                  rows={3}
-                  onChange={(event) => {
-                    setCaption(event.target.value);
-                    setCopied(false);
-                  }}
-                />
-              </label>
-              <div className="shot-list">
-                <span className="brief-label">A simple shot list</span>
-                <ol>
-                  {starterIdea(selected, business).steps.map((step) => (
-                    <li key={step}>{step}</li>
-                  ))}
-                </ol>
-              </div>
-              <div className="brief-actions">
-                <button
-                  className="outline-button"
-                  onClick={() => toggleSave(selected)}
-                >
-                  <Bookmark
-                    size={15}
-                    fill={saved.includes(selected.id) ? "currentColor" : "none"}
-                  />
-                  {saved.includes(selected.id) ? "Saved idea" : "Save idea"}
-                </button>
-                <button className="primary-button" onClick={copyBrief}>
-                  {copied ? <Check size={16} /> : <Copy size={16} />}
-                  {copied ? "Brief copied" : "Copy post brief"}
-                </button>
-              </div>
-              <p className="brief-footnote">
-                Use this as a starting point. Choose trends that fit your
-                customers.
-              </p>
             </>
           )}
         </DialogContent>

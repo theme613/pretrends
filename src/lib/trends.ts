@@ -4,8 +4,14 @@ export type Trend = {
   creator: string;
   platform: string;
   categories: string[];
-  before: number;
-  after: number;
+  before: number | null;
+  image: string | null;
+  steps: string[];
+  collectedAt: string | null;
+  baselineAt: string | null;
+  aiStatus: string;
+  after: number | null;
+  hasBaseline: boolean;
   score: number;
   reason: string;
   decision: string;
@@ -71,6 +77,11 @@ export function normalizeTrends(data: unknown): Trend[] {
       typeof item.url === "string" && /^https?:\/\//i.test(item.url)
         ? item.url
         : null;
+    const hasBaseline =
+      demo ||
+      (item.has_baseline !== undefined
+        ? item.has_baseline === true
+        : Boolean(item.baseline_at));
     return [
       {
         id,
@@ -82,8 +93,28 @@ export function normalizeTrends(data: unknown): Trend[] {
               (c: unknown): c is string => typeof c === "string",
             )
           : [],
-        before: Math.max(0, Number(item.views_t0) || 0),
-        after: Math.max(0, Number(item.views_t1) || 0),
+        before:
+          item.views_t0 == null
+            ? Math.max(0, Number(item.views_t1) || 0)
+            : Math.max(0, Number(item.views_t0) || 0),
+        image:
+          typeof item.image === "string" && /^https:\/\//.test(item.image)
+            ? item.image
+            : null,
+        steps: Array.isArray(item.steps)
+          ? item.steps
+              .filter(
+                (step: unknown): step is string => typeof step === "string",
+              )
+              .slice(0, 3)
+          : [],
+        collectedAt:
+          typeof item.collected_at === "string" ? item.collected_at : null,
+        baselineAt:
+          typeof item.baseline_at === "string" ? item.baseline_at : null,
+        aiStatus: String(item.ai_status ?? "unavailable"),
+        after: hasBaseline ? Math.max(0, Number(item.views_t1) || 0) : null,
+        hasBaseline,
         score: Number.isFinite(rawScore)
           ? Math.round(
               Math.max(
@@ -96,7 +127,8 @@ export function normalizeTrends(data: unknown): Trend[] {
           item.reason ?? "Check the view counts to understand this signal.",
         ),
         decision: String(
-          item.decision ?? "Create content leveraging this trend immediately."
+          item.decision ??
+            "Start with one small post that fits your customers.",
         ),
         demo,
         url: demo ? null : url,
@@ -129,11 +161,15 @@ export function topic(trend: Trend) {
   );
 }
 export function growth(trend: Trend) {
-  return trend.before > 0
+  return trend.hasBaseline &&
+    trend.after !== null &&
+    trend.before !== null &&
+    trend.before > 0
     ? Math.round(((trend.after - trend.before) / trend.before) * 100)
     : null;
 }
-export function formatCount(value: number) {
+export function formatCount(value: number | null) {
+  if (value === null) return "—";
   return Intl.NumberFormat("en", {
     notation: "compact",
     maximumFractionDigits: 1,
@@ -141,6 +177,11 @@ export function formatCount(value: number) {
 }
 export function starterIdea(trend: Trend, business: string) {
   const shop = business.trim() || "our shop";
+  if (trend.steps.length === 3)
+    return {
+      hook: `Our take on ${trend.title}, from ${shop}.`,
+      steps: trend.steps,
+    };
   const ideas: Record<
     string,
     {

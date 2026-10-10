@@ -1922,3 +1922,226 @@
     gap: 10px;
   }
 }
+
+/* Trend detail: the same artwork and palette as the idea cards. */
+.idea-dialog.trend-detail-dialog {
+  max-width: 760px !important;
+  padding: 0;
+  gap: 0;
+  overscroll-behavior: contain;
+}
+.trend-detail-dialog > button[data-slot="dialog-close"] {
+  position: sticky;
+  top: 16px;
+  margin: 16px 16px -52px auto;
+  order: -1;
+  z-index: 5;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  background: #fffefa;
+  border-radius: 50%;
+  opacity: 1;
+}
+.detail-cover {
+  position: relative;
+}
+.detail-cover .trend-art {
+  height: 240px;
+}
+.detail-cover-label {
+  position: absolute;
+  bottom: 16px;
+  left: 24px;
+  padding: 7px 11px;
+  border-radius: 6px;
+  background: #fffefaed;
+  color: #594e61;
+  font-size: 11px;
+}
+.detail-content {
+  display: grid;
+  gap: 24px;
+  padding: 28px 34px;
+  min-width: 0;
+}
+.detail-heading {
+  display: grid;
+  gap: 12px;
+}
+.detail-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.detail-categories span {
+  background: #ece6f0;
+  color: #77628e;
+  padding: 5px 10px;
+  border-radius: 5px;
+  font-size: 11px;
+}
+.trend-detail-dialog [data-slot="dialog-title"] {
+  font-size: 30px;
+  overflow-wrap: anywhere;
+}
+.trend-detail-dialog [data-slot="dialog-description"] {
+  font-size: 13px;
+}
+.trend-detail-dialog .evidence-panel {
+  margin: 0;
+  padding: 18px 20px;
+}
+.trend-detail-dialog .evidence-title {
+  font-size: 12px;
+}
+.trend-detail-dialog .evidence-title > span {
+  font-size: 11px;
+}
+.trend-detail-dialog .view-comparison {
+  margin: 16px 0 10px;
+}
+.trend-detail-dialog .view-comparison > div > span {
+  font-size: 11px;
+}
+.trend-detail-dialog .evidence-source {
+  font-size: 10px;
+}
+.detail-explanation h3,
+.detail-plan h3 {
+  font-size: 17px;
+  font-weight: 550;
+  letter-spacing: -0.3px;
+}
+.detail-explanation p,
+.detail-plan p {
+  color: #78717c;
+  font-size: 13px;
+  line-height: 1.8;
+  margin-top: 8px;
+}
+.detail-plan {
+  border-top: 1px solid #e8e1ea;
+  padding-top: 24px;
+}
+.detail-plan-heading {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.detail-plan-heading > svg {
+  color: #887198;
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+.detail-plan-heading p {
+  margin-top: 3px;
+}
+.detail-plan ol {
+  display: grid;
+  gap: 20px;
+  list-style: none;
+  padding: 0;
+  margin: 22px 0 0;
+}
+.detail-plan li {
+  display: flex;
+  gap: 14px;
+}
+.detail-step-number {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  background: #eee8f2;
+  border-radius: 50%;
+  color: #806890;
+  font-size: 11px;
+}
+.detail-plan h4 {
+  font-size: 13px;
+  font-weight: 550;
+}
+.detail-plan li p {
+  margin-top: 3px;
+}
+.detail-caption {
+  border: 1px solid #e4dce8;
+  border-radius: 8px;
+  padding: 16px;
+}
+.detail-caption summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  font-size: 13px;
+  color: #77628e;
+  list-style: none;
+}
+.detail-caption summary::-webkit-details-marker {
+  display: none;
+}
+.detail-caption[open] summary > svg {
+  transform: rotate(180deg);
+}
+.detail-caption-fields {
+  display: grid;
+  gap: 14px;
+  padding-top: 16px;
+}
+.trend-detail-dialog .brief-actions {
+  padding-top: 18px;
+}
+.trend-detail-dialog .brief-footnote {
+  margin-top: -10px;
+  font-size: 10px;
+}
+@media (max-width: 600px) {
+  .idea-dialog.trend-detail-dialog {
+    max-width: calc(100% - 24px) !important;
+  }
+  .detail-cover .trend-art {
+    height: 185px;
+  }
+  .detail-content {
+    padding: 22px 18px;
+    gap: 22px;
+  }
+  .trend-detail-dialog [data-slot="dialog-title"] {
+    font-size: 24px;
+  }
+  .trend-detail-dialog .evidence-panel {
+    padding: 14px;
+  }
+  .trend-detail-dialog .view-comparison {
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .trend-detail-dialog .view-comparison strong {
+    font-size: 22px;
+  }
+  .trend-detail-dialog .brief-actions {
+    flex-wrap: wrap;
+  }
+  .trend-detail-dialog .brief-actions button {
+    flex: 1;
+    justify-content: center;
+  }
+}
+
+.trend-detail-dialog .view-comparison strong.waiting-views {
+  font-size: 13px;
+  line-height: 1.5;
+  letter-spacing: 0;
+  max-width: 140px;
+  color: #897590;
+}
+.load-more > span {
+  display: block;
+  margin-top: 12px;
+  font-size: 12px;
+  color: #8a7e91;
+}
