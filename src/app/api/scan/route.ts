@@ -25,6 +25,38 @@ export async function POST(request: Request) {
   // in this local process cannot both start paid work.
   const job = createScanJob(options);
   state.pretrendsScanJob = job;
+  if (options.mode === "refresh") {
+    await runScan(job);
+    if (job.status === "failed") {
+      return NextResponse.json({ error: job.error || "Scan failed. Please try again." }, { status: 500, headers: noStore });
+    }
+    const eligible = await latestTrends();
+    const batch = selectRefreshBatch(eligible, job.filters, job.freshIds, job.refreshedIds);
+    return NextResponse.json({
+      id: job.id,
+      mode: job.mode,
+      filters: job.filters,
+      batch,
+      status: job.status,
+      stage: job.stage,
+      processed: job.processed,
+      total: job.total,
+      revision: job.revision,
+      started_at: job.started_at,
+      warnings: job.warnings,
+      metrics: job.metrics,
+      data: { timestamp: new Date().toISOString(), candidates: eligible },
+      result: job.result ? { ...job.result, batch, data: { ...job.result.data, candidates: eligible } } : {
+        batch,
+        live_scan: true as const,
+        scraped_count: job.total,
+        verified_count: eligible.length,
+        warnings: job.warnings,
+        ai_usage: { input_tokens: job.metrics.input_tokens, output_tokens: job.metrics.output_tokens },
+        data: { timestamp: new Date().toISOString(), candidates: eligible },
+      },
+    }, { status: 200, headers: noStore });
+  }
   after(async () => { await runScan(job); });
   return NextResponse.json({ id: job.id, mode: job.mode, filters: job.filters, joined: false }, { status: 202, headers: noStore });
 }

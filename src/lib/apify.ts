@@ -123,7 +123,7 @@ export async function scrape(
   const actor =
     platform === "Instagram"
       ? "apify~instagram-scraper"
-      : "apidojo~tiktok-scraper-api";
+      : "clockworks~tiktok-scraper";
   const input =
     platform === "Instagram"
       ? {
@@ -145,7 +145,10 @@ export async function scrape(
               (hashtag) => `https://www.tiktok.com/tag/${hashtag}`,
             ),
           ],
-          maxItems: limit,
+          hashtags: hashtags.length ? hashtags : ["food"],
+          resultsPerPage: Math.min(20, limit),
+          maxRequestRetries: 1,
+          ...(knownPosts.length ? { postURLs: knownPosts.map((post) => post.url) } : {}),
         };
   const headers = {
     Authorization: `Bearer ${process.env.APIFY_API_TOKEN}`,

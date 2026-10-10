@@ -282,7 +282,7 @@ export default function TrendExplorer({
       if (controller.signal.aborted) abort();
     });
     const started = Date.now();
-    const requestSignal = () => AbortSignal.any([controller.signal, AbortSignal.timeout(20000)]);
+    const requestSignal = () => AbortSignal.any([controller.signal, AbortSignal.timeout(120000)]);
     try {
       const response = await fetch("/api/scan", {
         method: "POST", headers: { "Content-Type": "application/json" },

@@ -28,11 +28,11 @@ function describesVisibleAction(category: string, description: string) {
   )
     return false;
   if (category === "food")
-    return /\b(?:chop(?:ping|s)?|slic(?:e|ing|es)|mix(?:ing|es)?|stir(?:ring|s)?|knead(?:ing|s)?|pour(?:ing|s)?|peel(?:ing|s)?|wash(?:ing|es)?|fry(?:ing|ies)?|boil(?:ing|s)?|bak(?:e|ing|es)|grill(?:ing|s)?|whisk(?:ing|s)?|cut(?:ting|s)?|spread(?:ing|s)?|add(?:ing|s)? ingredients|rolling dough)\b/i.test(
+    return /\b(?:chop(?:ping|s)?|slic(?:e|ing|es)|mix(?:ing|es)?|stir(?:ring|s)?|knead(?:ing|s)?|pour(?:ing|s)?|peel(?:ing|s)?|wash(?:ing|es)?|fry(?:ing|ies)?|boil(?:ing|s)?|bak(?:e|ing|es)|grill(?:ing|s)?|whisk(?:ing|s)?|cut(?:ting|s)?|spread(?:ing|s)?|add(?:ing|s)? ingredients|rolling dough|cook(?:ing|ed|s)?|plat(?:ing|e|es)|eat(?:ing|s)?|tast(?:ing|e|es)|mak(?:ing|e|es)|prepar(?:ing|e|es)|serv(?:ing|e|es))\b/i.test(
       description,
     );
   if (category === "music")
-    return /\b(?:sing(?:ing|s)?|strum(?:ming|s)?|pluck(?:ing|s)?|playing (?:an? )?(?:instrument|guitar|piano|keyboard|violin|drum|saxophone|flute|trumpet)|pressing piano keys)\b/i.test(
+    return /\b(?:sing(?:ing|s)?|strum(?:ming|s)?|pluck(?:ing|s)?|playing (?:an? )?(?:instrument|guitar|piano|keyboard|violin|drum|saxophone|flute|trumpet|accordion|bass|cello|harp|clarinet|brass)|pressing piano keys|perform(?:ing|ance|s)?)\b/i.test(
       description,
     );
   return true;

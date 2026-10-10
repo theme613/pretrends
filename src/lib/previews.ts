@@ -17,8 +17,14 @@ function previewPath(key: string) {
   return path.join(directory, `${key}.jpg`);
 }
 export async function readPreview(key: string) {
-  try { return await fs.readFile(previewPath(key)); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+  if (!/^[a-f0-9]{64}$/.test(key)) throw new Error("Invalid preview key.");
+  const defaultDir = path.join(process.cwd(), "data", "previews");
+  const dirs = directory === defaultDir ? [directory] : [directory, defaultDir];
+  for (const dir of dirs) {
+    try { return await fs.readFile(path.join(dir, `${key}.jpg`)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  }
+  return null;
 }
 export async function savePreview(key: string, frame: string) {
   if (!frame.startsWith("data:image/jpeg;base64,")) throw new Error("Invalid preview frame.");
