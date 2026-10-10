@@ -1,37 +1,57 @@
 import { NextResponse } from 'next/server';
-import { exec } from 'child_process';
-import util from 'util';
+import { ApifyClient } from 'apify-client';
 import path from 'path';
 import fs from 'fs';
 import { processCandidate, ScrapedData, TrendCandidate } from '@/lib/agent';
 
-const execAsync = util.promisify(exec);
-
-async function runScraper(scriptName: string): Promise<ScrapedData[]> {
-  const scriptPath = path.join(process.cwd(), 'scrapers', scriptName);
-  try {
-    const { stdout } = await execAsync(`python "${scriptPath}"`);
-    return JSON.parse(stdout.trim());
-  } catch (error) {
-    console.error(`Scraper ${scriptName} failed:`, error);
-    return [];
-  }
-}
-
 export async function POST() {
-  const scrapers = ['youtube.py', 'tiktok.py', 'instagram.py', 'x.py'];
+  const apifyToken = process.env.APIFY_API_TOKEN;
   const allResults: ScrapedData[] = [];
   let liveScanSuccess = false;
 
-  for (const script of scrapers) {
-    const data = await runScraper(script);
-    if (data && data.length > 0) {
-      allResults.push(...data);
+  // 1. Run Apify Scraper if token exists
+  if (apifyToken) {
+    console.log("Starting live Apify scan...");
+    try {
+      const client = new ApifyClient({ token: apifyToken });
+      
+      // Using an official, fast Instagram scraper from Apify
+      // We keep resultsLimit very low (2) so the Next.js API doesn't time out during the hackathon demo
+      const run = await client.actor("apify/instagram-scraper").call({
+        search: ["startup", "tech", "indiepop"],
+        searchType: "hashtag",
+        resultsLimit: 2,
+      });
+
+      const { items } = await client.dataset(run.defaultDatasetId).listItems();
+      
+      for (const item of items) {
+        // Map Apify's raw JSON into our expected ScrapedData format
+        // Simulating the "t0" (past) metric mathematically for the demo since we don't have a historical DB yet
+        const currentViews = item.videoPlayCount || item.likesCount || 5000;
+        const simulatedPastViews = Math.floor(currentViews / (1 + Math.random() * 5)); 
+
+        allResults.push({
+          id: item.id || Math.random().toString(),
+          title: String(item.caption || "Instagram Post").substring(0, 50) + "...",
+          creator: item.ownerUsername || "unknown",
+          platform: "Instagram",
+          url: item.url || "https://instagram.com",
+          views_t0: simulatedPastViews,
+          views_t1: currentViews,
+          collected_at: new Date().toISOString()
+        });
+      }
       liveScanSuccess = true;
+      console.log(`Apify returned ${allResults.length} live results.`);
+    } catch (error) {
+      console.error("Apify scan failed:", error);
     }
+  } else {
+    console.log("No APIFY_API_TOKEN found. Skipping live scrape.");
   }
 
-  // Load seed data if no live results or as a baseline
+  // 2. Load seed data as a baseline
   let trendsData: TrendCandidate[] = [];
   try {
     const seedPath = path.join(process.cwd(), 'data', 'trends.json');
@@ -42,17 +62,15 @@ export async function POST() {
     console.error("Failed to load seed data", err);
   }
 
-  // Process live candidates through AI Agent
+  // 3. Process live candidates through Qwen 3.7 AI Agent
   const enrichedCandidates: TrendCandidate[] = [];
   for (const item of allResults) {
     const processed = await processCandidate(item);
     enrichedCandidates.push(processed);
   }
 
-  // Merge live candidates with existing trends
-  const merged = [...enrichedCandidates, ...trendsData];
-
   // Pick hottest category for retargeting
+  const merged = [...enrichedCandidates, ...trendsData];
   const categoriesCount: Record<string, number> = {};
   merged.forEach(c => {
     c.categories.forEach(cat => {
@@ -83,7 +101,7 @@ export async function POST() {
   }
 
   return NextResponse.json({
-    message: 'Scan completed',
+    message: liveScanSuccess ? 'Live Apify scan completed' : 'Fallback scan completed (No Apify Key)',
     live_scan: liveScanSuccess,
     scraped_count: enrichedCandidates.length,
     next_target: nextTargetCategory,
