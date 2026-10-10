@@ -24,6 +24,22 @@ export async function readPreview(key: string) {
     try { return await fs.readFile(path.join(dir, `${key}.jpg`)); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    try {
+      const { list } = await import("@vercel/blob");
+      const { blobs } = await list({ prefix: `previews/${key}.jpg` });
+      const match = blobs.find((b) => b.pathname === `previews/${key}.jpg`);
+      if (match) {
+        const res = await fetch(match.url);
+        if (res.ok) {
+          const buffer = Buffer.from(await res.arrayBuffer());
+          await fs.mkdir(directory, { recursive: true }).catch(() => {});
+          await fs.writeFile(path.join(directory, `${key}.jpg`), buffer).catch(() => {});
+          return buffer;
+        }
+      }
+    } catch {}
+  }
   return null;
 }
 export async function savePreview(key: string, frame: string) {
@@ -35,6 +51,14 @@ export async function savePreview(key: string, frame: string) {
   const temporary = `${destination}.${randomUUID()}.tmp`;
   try { await fs.writeFile(temporary, bytes); await fs.rename(temporary, destination); }
   finally { await fs.rm(temporary, { force: true }); }
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    try {
+      const { put } = await import("@vercel/blob");
+      await put(`previews/${key}.jpg`, bytes, { access: "public", addRandomSuffix: false });
+    } catch (error) {
+      console.error("Vercel Blob preview sync error:", error);
+    }
+  }
   return key;
 }
 // Share work across cards, the popup, route bundles and development reloads.

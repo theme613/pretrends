@@ -112,7 +112,7 @@ test("source eligibility hides stale, unavailable, unverified, legacy and malfor
   for (const changed of [
     { source_status: "unavailable" as const },
     { source_status: "unverified" as const },
-    { source_verified_at: "2026-10-09T15:59:59Z" },
+    { source_verified_at: "2026-10-03T15:59:59Z" },
     { source_verified_at: "2026-10-11T16:00:00Z" },
     { content_check_version: undefined },
     { category_evidence: [] },

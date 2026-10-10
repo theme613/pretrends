@@ -221,6 +221,30 @@ async function historySignature() {
   }
   return [...new Set(names)].sort().join("|");
 }
+async function syncBlob(pathname: string, data: string) {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) return;
+  try {
+    const { put } = await import("@vercel/blob");
+    await put(pathname, data, { access: "public", addRandomSuffix: false });
+  } catch (error) {
+    console.error("Vercel Blob sync error:", error);
+  }
+}
+async function fetchBlob(pathname: string): Promise<string | null> {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) return null;
+  try {
+    const { list } = await import("@vercel/blob");
+    const { blobs } = await list({ prefix: pathname });
+    const match = blobs.find((b) => b.pathname === pathname);
+    if (!match) return null;
+    const res = await fetch(match.url, { cache: "no-store" });
+    if (!res.ok) return null;
+    return await res.text();
+  } catch {
+    return null;
+  }
+}
+
 async function indexedCandidates(): Promise<TrendCandidate[]> {
   const signature = await historySignature();
   if (writableDirectory !== directory) {
@@ -229,6 +253,22 @@ async function indexedCandidates(): Promise<TrendCandidate[]> {
       if (index.version === 1 && (!signature || index.signature === signature) && Array.isArray(index.candidates) &&
           index.candidates.every((post: TrendCandidate) => post && typeof post.id === "string" && typeof post.platform === "string"))
         return index.candidates;
+    } catch {
+      /* ignore */
+    }
+  }
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    try {
+      const blobText = await fetchBlob("scans/collection-index.json");
+      if (blobText) {
+        const index = JSON.parse(blobText);
+        if (index.version === 1 && Array.isArray(index.candidates) &&
+            index.candidates.every((post: TrendCandidate) => post && typeof post.id === "string" && typeof post.platform === "string")) {
+          await fs.mkdir(writableDirectory, { recursive: true }).catch(() => {});
+          await fs.writeFile(writableIndexFile, blobText).catch(() => {});
+          return index.candidates;
+        }
+      }
     } catch {
       /* ignore */
     }
@@ -261,9 +301,11 @@ export function latestTrends(): Promise<TrendCandidate[]> {
 async function writeIndex(candidates: TrendCandidate[]) {
   try {
     await fs.mkdir(writableDirectory, { recursive: true });
+    const content = JSON.stringify({ version: 1, signature: await historySignature(), candidates });
     const temporary = `${writableIndexFile}.${randomUUID()}.tmp`;
-    await fs.writeFile(temporary, JSON.stringify({ version: 1, signature: await historySignature(), candidates }));
+    await fs.writeFile(temporary, content);
     await fs.rename(temporary, writableIndexFile);
+    await syncBlob("scans/collection-index.json", content);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EROFS") {
       return;
@@ -328,9 +370,12 @@ export function saveScan(scan: Scan) {
     try {
       const current = await indexedCandidates();
       await fs.mkdir(writableDirectory, { recursive: true });
-      const filename = path.join(writableDirectory, `scan_${Date.now()}_${randomUUID()}.json`);
-      await fs.writeFile(`${filename}.tmp`, JSON.stringify(scan));
+      const scanName = `scan_${Date.now()}_${randomUUID()}.json`;
+      const filename = path.join(writableDirectory, scanName);
+      const json = JSON.stringify(scan);
+      await fs.writeFile(`${filename}.tmp`, json);
       await fs.rename(`${filename}.tmp`, filename);
+      await syncBlob(`scans/${scanName}`, json);
       await writeIndex(mergeScans([scan, { timestamp: "1970-01-01", candidates: current }]));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EROFS") {
