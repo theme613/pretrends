@@ -16,12 +16,7 @@ export async function GET(request: Request) {
         .map((trend) => trend.id),
     );
     return NextResponse.json(
-      data.filter(
-        (item) =>
-          item &&
-          typeof item === "object" &&
-          ids.has(String((item as { id: unknown }).id)),
-      ),
+      data.filter((item) => ids.has(`${item.platform}:${item.id}`)),
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch {

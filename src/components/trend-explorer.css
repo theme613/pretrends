@@ -2478,3 +2478,37 @@
     max-width: none;
   }
 }
+.forecast-note {
+  margin-top: 10px;
+  color: #78717c;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.prediction-title {
+  flex-wrap: wrap;
+}
+.art-unavailable {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  padding: 20px;
+  color: #77628e;
+  text-align: center;
+}
+.art-unavailable span {
+  font-size: 14px;
+  font-weight: 500;
+}
+.art-unavailable small {
+  font-size: 11px;
+}
+.preview-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #77628e;
+  font-size: 12px;
+}

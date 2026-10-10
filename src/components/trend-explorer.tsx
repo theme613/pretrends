@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { SOURCE_MAX_AGE_MS } from "@/lib/post-policy";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   ArrowRight,
@@ -12,7 +13,6 @@ import {
   Copy,
   ExternalLink,
   Flame,
-  MoveUpRight,
   Radar,
   RefreshCw,
   Search,
@@ -34,9 +34,9 @@ import {
   matchesCategory,
   normalizeTrends,
   starterIdea,
-  topic,
   type Trend,
 } from "@/lib/trends";
+import { forecastMessage } from "@/lib/forecast";
 import "./trend-explorer.css";
 function FilterMenu({
   label,
@@ -91,10 +91,13 @@ function TrendArtwork({
   eager?: boolean;
 }) {
   const [failedImage, setFailedImage] = useState<string | null>(null);
-  const category = topic(trend).id;
+  const [loadedImage, setLoadedImage] = useState<string | null>(null);
   if (trend.image && failedImage !== trend.image)
     return (
-      <div className="trend-art">
+      <div className="trend-art" aria-busy={loadedImage !== trend.image}>
+        {loadedImage !== trend.image && (
+          <span className="preview-loading">Loading preview…</span>
+        )}
         {/* Remote post thumbnails come from the scraper; fall back to category artwork if they expire. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
@@ -103,163 +106,23 @@ function TrendArtwork({
           loading={eager ? "eager" : "lazy"}
           decoding="async"
           referrerPolicy="no-referrer"
+          onLoad={() => setLoadedImage(trend.image)}
           onError={() => setFailedImage(trend.image)}
-          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            opacity: loadedImage === trend.image ? 1 : 0,
+          }}
         />
       </div>
     );
-  if (category === "fashion")
-    return (
-      <div className="trend-art art-fashion" aria-hidden="true">
-        <div className="art-grid" />
-        <span className="art-sticker">OLD SCHOOL. NEW ENERGY.</span>
-        <span className="fashion-lettering">
-          {trend.id === "t16" ? (
-            <>
-              Back to
-              <br />
-              <i>2000.</i>
-            </>
-          ) : (
-            <>
-              Wear it.
-              <br />
-              <i>Again.</i>
-            </>
-          )}
-        </span>
-        <svg className="fashion-star" viewBox="0 0 100 100">
-          <path
-            d="M50 0 60 35 94 14 72 45 100 50 72 58 94 88 60 67 50 100 40 67 6 88 28 58 0 50 28 45 6 14 40 35Z"
-            fill="currentColor"
-          />
-        </svg>
-        <div className="art-bottom">
-          <span>A LITTLE NOSTALGIA</span>
-          <span>↗</span>
-        </div>
-      </div>
-    );
-  if (category === "food")
-    return (
-      <div className="trend-art art-food" aria-hidden="true">
-        <span className="food-lettering">
-          a little
-          <br />
-          <i>extra heat.</i>
-        </span>
-        <svg className="ramen-art" viewBox="0 0 300 220">
-          <ellipse
-            cx="150"
-            cy="187"
-            rx="96"
-            ry="14"
-            fill="#bb6949"
-            opacity=".16"
-          />
-          <path d="M45 92Q53 177 150 181Q246 177 255 92Z" fill="#bc4534" />
-          <path
-            d="M58 118Q150 153 243 118M74 146Q150 171 226 146"
-            fill="none"
-            stroke="#f6cda5"
-            strokeWidth="4"
-          />
-          <ellipse cx="150" cy="92" rx="105" ry="36" fill="#fff2d3" />
-          <ellipse cx="150" cy="92" rx="93" ry="27" fill="#d67c40" />
-          <path
-            d="M73 94q30-36 58-4t60-1t37 6M74 83q30-23 58 1t63 1M87 104q25-27 54-2t58-7"
-            fill="none"
-            stroke="#f4d281"
-            strokeWidth="5"
-            strokeLinecap="round"
-          />
-          <ellipse
-            cx="174"
-            cy="86"
-            rx="23"
-            ry="15"
-            fill="#ffedcb"
-            transform="rotate(-18 174 86)"
-          />
-          <ellipse cx="174" cy="86" rx="10" ry="9" fill="#f5ad32" />
-          <path
-            d="m110 85 11-8m-15 24 13-3m83-10 12 3m-66-19 4-9"
-            stroke="#548249"
-            strokeWidth="5"
-          />
-          <path
-            d="m173 82 73-65m-62 66 74-63"
-            stroke="#673e2b"
-            strokeWidth="5"
-            strokeLinecap="round"
-          />
-          <path
-            d="M106 48q-13-12 0-23m28 14q-13-12 0-23"
-            fill="none"
-            stroke="#fff4df"
-            strokeWidth="3"
-            strokeLinecap="round"
-          />
-        </svg>
-        <div className="art-bottom">
-          <span>GOOD FOOD. GOOD CONTENT.</span>
-          <span>↗</span>
-        </div>
-      </div>
-    );
-  if (category === "tech")
-    return (
-      <div className="trend-art art-tech" aria-hidden="true">
-        <div className="tech-grid" />
-        <span className="art-sticker tech-sticker">
-          SMALL TOOLS. BIG POSSIBILITIES.
-        </span>
-        <span className="tech-lettering">
-          Less busy.
-          <br />
-          <i>More clever.</i>
-        </span>
-        <div className="pixel-arrow">
-          <MoveUpRight strokeWidth={1.1} />
-        </div>
-        <span className="code-tag">&gt; make_room_for_ideas</span>
-        <div className="art-bottom">
-          <span>YOUR NEXT SMART MOVE</span>
-          <span>↗</span>
-        </div>
-      </div>
-    );
   return (
-    <div className={`trend-art art-other art-${category}`} aria-hidden="true">
-      <div className="other-orbit orbit-one" />
-      <div className="other-orbit orbit-two" />
-      <span className="art-sticker">A FRESH POINT OF VIEW</span>
-      <span className="other-lettering">
-        {category === "music" || category === "dance" ? (
-          <>
-            Find your
-            <br />
-            <i>rhythm.</i>
-          </>
-        ) : category === "game" ? (
-          <>
-            Next
-            <br />
-            <i>level.</i>
-          </>
-        ) : (
-          <>
-            Something
-            <br />
-            <i>different.</i>
-          </>
-        )}
-      </span>
-      <Sparkles className="other-spark" strokeWidth={1} />
-      <div className="art-bottom">
-        <span>{topic(trend).label.toUpperCase()}</span>
-        <span>↗</span>
-      </div>
+    <div className="trend-art art-unavailable">
+      <span>Preview unavailable</span>
+      <small>Open details to watch the original video.</small>
     </div>
   );
 }
@@ -276,6 +139,34 @@ export default function TrendExplorer({
   const [saved, setSaved] = useState<string[]>([]);
   const [selected, setSelected] = useState<Trend | null>(null);
   const detailTrigger = useRef<HTMLButtonElement | null>(null);
+  // Expiry is local: no paid request is triggered by opening or leaving the page open.
+  useEffect(() => {
+    if (!trends.length) return;
+    const expiresAt = Math.min(
+      ...trends.map(
+        (post) => Date.parse(post.sourceVerifiedAt) + SOURCE_MAX_AGE_MS,
+      ),
+    );
+    const timeout = setTimeout(
+      () => {
+        setTrends((current) =>
+          current.filter(
+            (post) =>
+              Date.parse(post.sourceVerifiedAt) + SOURCE_MAX_AGE_MS >
+              Date.now(),
+          ),
+        );
+        setSelected((current) =>
+          current &&
+          Date.parse(current.sourceVerifiedAt) + SOURCE_MAX_AGE_MS <= Date.now()
+            ? null
+            : current,
+        );
+      },
+      Math.max(0, expiresAt - Date.now() + 1),
+    );
+    return () => clearTimeout(timeout);
+  }, [trends]);
   const [howOpen, setHowOpen] = useState(false);
   const [business, setBusiness] = useState("");
   const [caption, setCaption] = useState("");
@@ -398,9 +289,17 @@ export default function TrendExplorer({
       setTrends(normalizeTrends(result.data.candidates));
       setVisibleCount(24);
       setMessage(
-        `Found ${result.scraped_count} posts. ${(result.warnings || []).join(" ")}`,
+        `Collected ${result.scraped_count} real posts; ${result.verified_count ?? 0} passed visual checks. ${(result.warnings || []).join(" ")}`,
       );
     } catch (error) {
+      try {
+        const latest = await fetch("/api/trends", { cache: "no-store" });
+        if (latest.ok) setTrends(normalizeTrends(await latest.json()));
+        else setTrends([]);
+      } catch {
+        setTrends([]);
+      }
+
       setMessage(
         error instanceof Error
           ? error.message
@@ -563,9 +462,7 @@ export default function TrendExplorer({
               {filtered.length} {filtered.length === 1 ? "idea" : "ideas"} to
               explore
             </span>
-            <span>
-              Real posts · AI suggestions
-            </span>
+            <span>Real posts · AI suggestions</span>
           </div>
           {message && (
             <div className="status-message" role="status">
@@ -678,9 +575,10 @@ export default function TrendExplorer({
           {filtered.length === 0 && (
             <div className="empty-state">
               <Bookmark size={30} strokeWidth={1.2} />
-              <h3>No videos match these categories yet.</h3>
+              <h3>No verified videos match yet.</h3>
               <p>
-                Try fewer categories, a different platform, or another search.
+                Run a scan to verify real videos, or try fewer categories.
+                Unconfirmed and expired posts stay hidden.
               </p>
               <button
                 className="primary-button"
@@ -827,7 +725,9 @@ export default function TrendExplorer({
                     {selected.platform}
                   </DialogDescription>
                 </header>
-                <div className={`evidence-panel evidence-panel--${selected.score >= 80 ? "strong" : selected.score >= 50 ? "medium" : "weak"}`}>
+                <div
+                  className={`evidence-panel evidence-panel--${selected.score >= 80 ? "strong" : selected.score >= 50 ? "medium" : "weak"}`}
+                >
                   <div className="evidence-title">
                     <Radar size={16} />
                     <strong>Behind the signal</strong>
@@ -835,21 +735,17 @@ export default function TrendExplorer({
                   </div>
                   <div className="view-comparison">
                     <div>
-                      <span>Current views</span>
+                      <span>
+                        {selected.hasBaseline
+                          ? "Earlier views"
+                          : "Starting views"}
+                      </span>
                       <strong>{formatCount(selected.before)}</strong>
                     </div>
                     <ArrowRight size={20} />
                     <div>
-                      <span>Estimated views</span>
-                      <strong
-                        className={
-                          selected.after === null ? "waiting-views" : undefined
-                        }
-                      >
-                        {selected.after === null
-                          ? "Waiting for next fetch"
-                          : formatCount(selected.after)}
-                      </strong>
+                      <span>Current views</span>
+                      <strong>{formatCount(selected.currentViews)}</strong>
                     </div>
                     <span className="growth-pill">
                       {growth(selected) === null
@@ -863,7 +759,11 @@ export default function TrendExplorer({
                   <span className="evidence-source">
                     {selected.baselineAt && selected.collectedAt
                       ? `${new Date(selected.baselineAt).toLocaleString()} → ${new Date(selected.collectedAt).toLocaleString()}`
-                      : "Starting views saved. Fetch this post again to compare the new views with this count."}
+                      : "Starting views saved. Fetch again later to measure growth."}
+                  </span>
+                  <span className="evidence-source">
+                    Last verified:{" "}
+                    {new Date(selected.sourceVerifiedAt).toLocaleString()}
                   </span>
                   {selected.url && (
                     <a
@@ -876,28 +776,31 @@ export default function TrendExplorer({
                     </a>
                   )}
                 </div>
-                {/* AI View Prediction Panel */}
-                {selected.predictedViews !== null && (
-                  <div className="prediction-panel">
-                    <div className="prediction-title">
-                      <TrendingUp size={16} />
-                      <strong>AI View Prediction</strong>
+                <section
+                  className="prediction-panel"
+                  aria-label="View forecast"
+                >
+                  <div className="prediction-title">
+                    <TrendingUp size={16} />
+                    <strong>Estimated total views in 3 days</strong>
+                    {selected.predictedViews !== null && (
                       <span className="prediction-estimate">
-                        {formatCount(selected.predictedViews)} estimated views
+                        {formatCount(selected.predictedViews)} views
                       </span>
-                    </div>
-                    {selected.predictionReasons && (
-                      <ol className="prediction-reasons">
-                        {selected.predictionReasons.map((reason, i) => (
-                          <li key={i}>
-                            <span className="reason-number">0{i + 1}</span>
-                            <span>{reason}</span>
-                          </li>
-                        ))}
-                      </ol>
                     )}
                   </div>
-                )}
+                  <p className="forecast-note">
+                    {forecastMessage(selected.forecast.status)}
+                  </p>
+                  {selected.forecast.status === "ready" && (
+                    <p className="forecast-note">
+                      Based on {formatCount(selected.forecast.views_per_hour)}{" "}
+                      views gained per hour between your last two fetches.
+                      Target:{" "}
+                      {new Date(selected.forecast.target_at!).toLocaleString()}.
+                    </p>
+                  )}
+                </section>
                 <section className="detail-explanation">
                   <h3>Why this trend matters</h3>
                   <p>

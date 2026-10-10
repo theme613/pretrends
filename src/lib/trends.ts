@@ -1,3 +1,10 @@
+import {
+  isEligiblePost,
+  sharesActivityFrame,
+  type CategoryEvidence,
+} from "./post-policy";
+import { calculateForecast, type Forecast } from "./forecast";
+import type { TrendCandidate } from "./agent";
 export type Trend = {
   id: string;
   title: string;
@@ -17,7 +24,10 @@ export type Trend = {
   decision: string;
   url: string | null;
   predictedViews: number | null;
-  predictionReasons: [string, string, string] | null;
+  forecast: Forecast;
+  sourceVerifiedAt: string;
+  categoryEvidence: CategoryEvidence[];
+  currentViews: number;
 };
 export const categories = [
   {
@@ -76,12 +86,14 @@ function cleanText(text: string): string {
     .replace(/\uFFFD/g, "");
 }
 
-export function normalizeTrends(data: unknown): Trend[] {
+export function normalizeTrends(data: unknown, now = Date.now()): Trend[] {
   if (!Array.isArray(data)) throw new Error("Invalid trend data");
   return data.flatMap((item): Trend[] => {
     if (!item || typeof item !== "object" || typeof item.title !== "string")
       return [];
-    const id = String(item.id ?? item.title);
+    if (!isEligiblePost(item as TrendCandidate, now)) return [];
+    const forecast = calculateForecast(item as TrendCandidate);
+    const id = `${item.platform}:${item.id}`;
     const rawScore = Number(item.breakout_score ?? item.score ?? 0);
     const url =
       typeof item.url === "string" && /^https?:\/\//i.test(item.url)
@@ -145,22 +157,11 @@ export function normalizeTrends(data: unknown): Trend[] {
           ),
         ),
         url,
-        predictedViews:
-          typeof item.predicted_views === "number" &&
-          Number.isFinite(item.predicted_views) &&
-          item.predicted_views > 0
-            ? Math.round(item.predicted_views)
-            : null,
-        predictionReasons:
-          Array.isArray(item.prediction_reasons) &&
-          item.prediction_reasons.length === 3 &&
-          item.prediction_reasons.every(
-            (r: unknown) => typeof r === "string" && (r as string).trim().length > 0,
-          )
-            ? (item.prediction_reasons.map((r) =>
-                cleanText(String(r)),
-              ) as [string, string, string])
-            : null,
+        predictedViews: forecast.estimated_total,
+        forecast,
+        sourceVerifiedAt: String(item.source_verified_at),
+        categoryEvidence: item.category_evidence,
+        currentViews: item.views_t1,
       },
     ];
   });
@@ -175,8 +176,9 @@ export function matchesCategory(trend: Trend, category: string) {
   );
 }
 export function matchesCategories(trend: Trend, selectedCategories: string[]) {
-  return selectedCategories.every((category) =>
-    matchesCategory(trend, category),
+  return (
+    selectedCategories.every((category) => matchesCategory(trend, category)) &&
+    sharesActivityFrame(trend.categoryEvidence, selectedCategories)
   );
 }
 export function topic(trend: Trend) {

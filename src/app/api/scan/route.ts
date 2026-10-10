@@ -1,14 +1,15 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
 import { NextResponse, after } from "next/server";
 import { randomUUID } from "node:crypto";
-import { processCandidates, type TrendCandidate } from "@/lib/agent";
+import { processCandidates, fallback } from "@/lib/agent";
+import { validSourceIdentity, type Verification } from "@/lib/post-policy";
 import { scrape } from "@/lib/apify";
 import {
   readScans,
   saveScan,
   latestTrends,
   compareObservation,
+  mergeScans,
+  previousObservation,
 } from "@/lib/scan-store";
 
 export const maxDuration = 900;
@@ -214,7 +215,7 @@ export async function POST(request: Request) {
   state.pretrendsScanJob = job;
   after(async () => {
     try {
-      job.result = await collect(platforms, topics, job);
+      job.result = await collect(platforms, topics, selected, job);
       job.status = "complete";
     } catch (error) {
       job.error =
@@ -244,104 +245,155 @@ export async function GET(request: Request) {
 async function collect(
   platforms: ("Instagram" | "TikTok")[],
   topics: string[],
+  selected: string[],
   job: ScanJob,
 ) {
-  try {
-    const scans = await readScans();
-    const results = await Promise.allSettled(
-      platforms.map((platform) => scrape(platform, topics, 300)),
-    );
-    const warnings = results.flatMap((result) =>
-      result.status === "rejected"
-        ? [
-            result.reason instanceof Error
-              ? result.reason.message
-              : "A platform could not be scanned.",
-          ]
-        : [],
-    );
-    results.forEach((result, index) => {
-      if (result.status === "fulfilled" && !result.value.length)
-        warnings.push(
-          `${platforms[index]} returned no videos with view counts. Try another category.`,
+  const deadline = Date.now() + 14 * 60 * 1000;
+  const scans = await readScans();
+  const stored = mergeScans(scans);
+  const previous = new Map(
+    stored.map((post) => [`${post.platform}:${post.id}`, post]),
+  );
+  const knownByPlatform = platforms.map((platform) =>
+    stored
+      .filter((post) => {
+        if (post.platform !== platform) return false;
+        let shortCode = post.short_code;
+        if (platform === "Instagram" && !shortCode) {
+          try {
+            shortCode = new URL(post.url).pathname.match(
+              /^\/(?:p|reel)\/([A-Za-z0-9_-]+)\/?$/,
+            )?.[1];
+          } catch {
+            return false;
+          }
+        }
+        return (
+          validSourceIdentity(post.platform, post.id, post.url, shortCode) &&
+          (!selected.length ||
+            (Array.isArray(post.categories) &&
+              selected.every((category) => post.categories.includes(category))))
         );
-    });
-    const posts = results.flatMap((result) =>
-      result.status === "fulfilled" ? result.value : [],
-    );
-    if (!posts.length)
-      throw new Error(
-        warnings.join(" ") ||
-          "No videos with view counts were found. Try a different category.",
-      );
-    const unique = [
-      ...new Map(
-        posts.map((post) => [`${post.platform}:${post.id}`, post]),
-      ).values(),
-    ];
-    const previous = new Map<string, TrendCandidate>();
-    for (const scan of scans)
-      for (const post of scan.candidates) {
-        const key = `${post.platform}:${post.id}`;
-        if (!previous.has(key) && Number.isFinite(post.views_t1))
-          previous.set(key, post);
-      }
-    const observations = unique.map((post) =>
-      compareObservation(post, previous.get(`${post.platform}:${post.id}`)),
-    );
-    // Keep only the top 50 before sending to the AI for performance.
-    const topObservations = observations
-      .sort((a, b) => {
-        const vA =
-          a.views_t0 && a.views_t0 > 0
-            ? (a.views_t1 - a.views_t0) / a.views_t0
-            : -1;
-        const vB =
-          b.views_t0 && b.views_t0 > 0
-            ? (b.views_t1 - b.views_t0) / b.views_t0
-            : -1;
-        if (vA !== vB) return vB - vA;
-        return b.views_t1 - a.views_t1;
       })
-      .slice(0, 50);
-
-    job.total = topObservations.length;
-    job.stage = "Preparing AI guidance";
-    const allCandidates = await processCandidates(
-      topObservations,
-      (processed) => {
-        job.processed = processed;
-      },
+      .sort(
+        (a, b) =>
+          Date.parse(a.source_verified_at || "1970-01-01") -
+          Date.parse(b.source_verified_at || "1970-01-01"),
+      )
+      .slice(0, 100),
+  );
+  const results = await Promise.allSettled(
+    platforms.map((platform, index) =>
+      scrape(platform, topics, 300, knownByPlatform[index]),
+    ),
+  );
+  const warnings: string[] = [];
+  const verifications: Verification[] = [];
+  const posts = results.flatMap((result, index) => {
+    if (result.status === "fulfilled") {
+      verifications.push(...result.value.verifications);
+      if (!result.value.posts.length)
+        warnings.push(
+          `${platforms[index]} returned no verifiable videos with real view counts.`,
+        );
+      return result.value.posts;
+    }
+    warnings.push(
+      result.reason instanceof Error
+        ? result.reason.message
+        : `${platforms[index]} could not be scanned.`,
     );
-    // Keep top 50 by AI score so the UI stays fast and focused (it's 50 already, but sort it).
-    const candidates = [...allCandidates].sort((a, b) => b.score - a.score);
-    job.stage = "Saving posts…";
-    const unavailable = candidates.filter(
-      (candidate) => candidate.ai_status === "unavailable",
-    ).length;
-    if (unavailable)
-      warnings.push(
-        `AI guidance was unavailable for ${unavailable} post(s). Real post details are still available.`,
-      );
-    const scan = { timestamp: new Date().toISOString(), candidates };
-    await saveScan(scan);
-    return {
-      live_scan: true,
-      scraped_count: candidates.length,
-      warnings,
-      data: { ...scan, candidates: await latestTrends() },
-    };
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      (error.message.includes("Apify") ||
-        error.message.includes("videos with view counts") ||
-        error.message.includes("Scraper"))
-    )
-      throw error;
+    verifications.push(
+      ...knownByPlatform[index].map((post) => ({
+        id: post.id,
+        platform: post.platform,
+        status: "unverified" as const,
+        checked_at: new Date().toISOString(),
+      })),
+    );
+    return [];
+  });
+  const unique = [
+    ...new Map(
+      posts.map((post) => [`${post.platform}:${post.id}`, post]),
+    ).values(),
+  ];
+  if (!unique.length) {
+    // Persist failures so a previous success cannot keep a blocked post visible.
+    if (verifications.length)
+      await saveScan({
+        timestamp: new Date().toISOString(),
+        candidates: [],
+        verifications,
+      });
     throw new Error(
-      "Could not complete or save the scan. Please check the server and try again.",
+      warnings.join(" ") || "No verified videos were found. Try another topic.",
     );
   }
+  const observations = unique.map((post) =>
+    compareObservation(post, previousObservation(scans, post)),
+  );
+  // Freshly discovered videos and known posts share the same 250-check budget.
+  const toAnalyze = observations.slice(0, 250);
+  job.total = toAnalyze.length;
+  job.stage = "Checking video content";
+  const analyzed = await processCandidates(
+    toAnalyze,
+    (processed) => {
+      job.processed = processed;
+    },
+    previous,
+    deadline - 90000,
+  );
+  const candidates = [
+    ...analyzed,
+    ...observations
+      .slice(250)
+      .map((post) =>
+        fallback(post, "Waiting for a visual check in a later scan."),
+      ),
+  ];
+  const hidden = candidates.filter(
+    (candidate) => candidate.content_status !== "verified",
+  );
+  if (hidden.length)
+    warnings.push(
+      `${hidden.length} collected post(s) are hidden because their visual content is unconfirmed.`,
+    );
+  const failures = [
+    ...new Set(hidden.map((post) => post.check_error).filter(Boolean)),
+  ];
+  warnings.push(...(failures.slice(0, 3) as string[]));
+  const uncertainSources = verifications.filter(
+    (entry) => entry.status !== "available",
+  ).length;
+  if (uncertainSources)
+    warnings.push(
+      `${uncertainSources} saved post(s) are hidden because their availability could not be confirmed.`,
+    );
+  const aiUsage = analyzed.reduce(
+    (total, post) => ({
+      input_tokens: total.input_tokens + (post.ai_usage?.input_tokens || 0),
+      output_tokens: total.output_tokens + (post.ai_usage?.output_tokens || 0),
+    }),
+    { input_tokens: 0, output_tokens: 0 },
+  );
+  job.stage = "Saving verified results";
+  const scan = {
+    timestamp: new Date().toISOString(),
+    candidates,
+    verifications,
+  };
+  await saveScan(scan);
+  const eligible = await latestTrends();
+  return {
+    live_scan: true,
+    scraped_count: unique.length,
+    verified_count: analyzed.filter(
+      (post) => post.content_status === "verified",
+    ).length,
+    warnings,
+    ai_usage: aiUsage,
+    data: { timestamp: scan.timestamp, candidates: eligible },
+  };
 }
-

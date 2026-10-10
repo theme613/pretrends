@@ -1,4 +1,5 @@
 import type { ScrapedData } from "./agent";
+import { validSourceIdentity, type Verification } from "./post-policy";
 
 type Item = Record<string, unknown>;
 const object = (value: unknown): Item =>
@@ -7,6 +8,13 @@ const webUrl = (value: unknown) =>
   typeof value === "string" && /^https:\/\//.test(value) ? value : undefined;
 
 export function parsePost(item: Item, platform: string): ScrapedData | null {
+  if (
+    item.error ||
+    item.errorDescription ||
+    item.isPrivate === true ||
+    item.isDeleted === true
+  )
+    return null;
   const author = object(item.author);
   const authorMeta = object(item.authorMeta);
   const stats = object(item.stats);
@@ -20,7 +28,9 @@ export function parsePost(item: Item, platform: string): ScrapedData | null {
   if (
     rawViews === null ||
     rawViews === undefined ||
-    !Number.isFinite(Number(rawViews)) ||
+    !["string", "number"].includes(typeof rawViews) ||
+    String(rawViews).trim() === "" ||
+    !Number.isSafeInteger(Number(rawViews)) ||
     Number(rawViews) < 0
   )
     return null;
@@ -34,6 +44,8 @@ export function parsePost(item: Item, platform: string): ScrapedData | null {
   );
   const id = item.id ?? item.aweme_id ?? item.shortCode;
   if (!id) return null;
+  const shortCode =
+    typeof item.shortCode === "string" ? item.shortCode : undefined;
   const url =
     platform === "Instagram"
       ? (webUrl(item.url ?? item.postUrl) ??
@@ -50,16 +62,34 @@ export function parsePost(item: Item, platform: string): ScrapedData | null {
         (creator !== "unknown"
           ? `https://www.tiktok.com/@${creator}/video/${id}`
           : undefined));
-  if (!url) return null;
+  if (!url || !validSourceIdentity(platform, String(id), url, shortCode))
+    return null;
+  const caption = String(
+    item.caption ?? item.desc ?? item.text ?? item.title ?? `${platform} video`,
+  );
+  const media = object(item.videoMeta);
+  const videoUrl = webUrl(
+    item.videoUrl ??
+      video.url ??
+      video.downloadAddr ??
+      video.playAddr ??
+      media.downloadAddr,
+  );
+  const duration = Number(
+    item.videoDuration ?? video.duration ?? media.duration,
+  );
   return {
     id: String(id),
-    title: String(
-      item.caption ??
-        item.desc ??
-        item.text ??
-        item.title ??
-        `${platform} video`,
-    ).slice(0, 180),
+    title: caption.slice(0, 180),
+    caption,
+    short_code: shortCode,
+    video_url: videoUrl,
+    duration_seconds:
+      Number.isFinite(duration) && duration > 0 ? duration : undefined,
+    published_at:
+      typeof (item.timestamp ?? item.uploadedAtFormatted) === "string"
+        ? String(item.timestamp ?? item.uploadedAtFormatted)
+        : undefined,
     creator,
     platform,
     url,
@@ -79,7 +109,12 @@ export async function scrape(
   platform: "Instagram" | "TikTok",
   hashtags: string[],
   limit = 300,
-): Promise<ScrapedData[]> {
+  knownPosts: ScrapedData[] = [],
+): Promise<{
+  posts: ScrapedData[];
+  verifications: Verification[];
+  run_id: string;
+}> {
   const actor =
     platform === "Instagram"
       ? "apify~instagram-scraper"
@@ -87,16 +122,24 @@ export async function scrape(
   const input =
     platform === "Instagram"
       ? {
-          directUrls: hashtags.map(
-            (hashtag) => `https://www.instagram.com/explore/tags/${hashtag}/`,
-          ),
+          directUrls: [
+            ...knownPosts.map((post) => post.url),
+            ...hashtags.map(
+              (hashtag) => `https://www.instagram.com/explore/tags/${hashtag}/`,
+            ),
+          ],
           resultsType: "reels",
-          resultsLimit: Math.ceil(limit / hashtags.length),
+          resultsLimit: hashtags.length
+            ? Math.ceil(limit / hashtags.length)
+            : 1,
         }
       : {
-          startUrls: hashtags.map(
-            (hashtag) => `https://www.tiktok.com/tag/${hashtag}`,
-          ),
+          startUrls: [
+            ...knownPosts.map((post) => post.url),
+            ...hashtags.map(
+              (hashtag) => `https://www.tiktok.com/tag/${hashtag}`,
+            ),
+          ],
           maxItems: limit,
         };
   const headers = {
@@ -152,8 +195,59 @@ export async function scrape(
   );
   if (!Array.isArray(items))
     throw new Error(`${platform}: Apify returned an unexpected response.`);
-  return items.flatMap((item) => {
+  const checkedAt = new Date().toISOString();
+  const posts = items.flatMap((item) => {
     const post = parsePost(object(item), platform);
-    return post ? [post] : [];
+    if (!post) return [];
+    const known = knownPosts.find((entry) => entry.id === post.id);
+    if (
+      known &&
+      new URL(known.url).pathname.replace(/\/$/, "") !==
+        new URL(post.url).pathname.replace(/\/$/, "") &&
+      platform === "TikTok"
+    )
+      return [];
+    return [
+      {
+        ...post,
+        source_status: "available" as const,
+        source_verified_at: checkedAt,
+        source_run_id: String(run.id),
+      },
+    ];
   });
+  const found = new Set(posts.map((post) => post.id));
+  const verifications: Verification[] = knownPosts.map((post) => {
+    const errorRow = items
+      .map(object)
+      .find(
+        (row) =>
+          (row.inputUrl === post.url ||
+            row.inputSource === post.url ||
+            row.url === post.url ||
+            String(row.id) === post.id) &&
+          (row.error || row.isPrivate === true || row.isDeleted === true),
+      );
+    const explicitUnavailable =
+      errorRow &&
+      (errorRow.isPrivate === true ||
+        errorRow.isDeleted === true ||
+        ["not-found", "not_found", "deleted", "private"].includes(
+          String(errorRow.error).toLowerCase(),
+        ));
+    return {
+      id: post.id,
+      platform,
+      checked_at: checkedAt,
+      run_id: String(run.id),
+      status: explicitUnavailable
+        ? "unavailable"
+        : errorRow
+          ? "unverified"
+          : found.has(post.id)
+            ? "available"
+            : "unverified",
+    };
+  });
+  return { posts, verifications, run_id: String(run.id) };
 }
