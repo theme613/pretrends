@@ -26,6 +26,7 @@ export interface TrendCandidate extends ScrapedData {
   breakout: "high" | "medium" | "low";
   score: number;
   reason: string;
+  decision: string; // The "So do Z" step
   velocity: number;
 }
 
@@ -45,13 +46,14 @@ export async function processCandidate(data: ScrapedData): Promise<TrendCandidat
       categories: ["demo"],
       breakout: velocity > 2 ? "high" : "low",
       score: Math.min(velocity / 10, 1),
-      reason: `Velocity is ${velocity.toFixed(2)}x (fallback reason).`
+      reason: `Velocity is ${velocity.toFixed(2)}x.`,
+      decision: "Monitor closely for another 24 hours before deploying capital/effort."
     };
   }
 
   const prompt = `
-You are an elite trend-forecasting AI. Analyze this content candidate to predict FUTURE viral trends.
-Your specific goal is to look for UNUSUAL anomalies—like a massive spike in people using a specific music track or post format over a short timeframe (e.g., 3 days).
+You are an elite trend-forecasting AI for a hackathon. Your job is to output: "Our AI predicts X, it's high risk/opportunity because Y, so do Z."
+Look for UNUSUAL anomalies—like a massive spike in people using a specific music track or post format over a short timeframe (e.g., 3 days).
 
 Candidate Data:
 Title/Trend: "${data.title}"
@@ -62,15 +64,18 @@ View Velocity: ${velocity.toFixed(2)}x growth (views grew from ${data.views_t0} 
 ${data.audio_name ? `Audio/Music Track: "${data.audio_name}"\nAudio Usage Velocity: ${audioVelocity.toFixed(2)}x growth (people using this sound grew from ${data.audio_uses_t0} to ${data.audio_uses_t1})` : "Audio/Music Track: N/A"}
 
 Instructions:
-1. If you see an unusual, explosive spike in either views or audio/music usage over this ${data.timeframe_days || 3}-day window, score it closer to 1.0 as a highly probable future viral trend.
-2. If the growth is flat or normal, score it lower.
+1. Detect: Look at the velocity.
+2. Categorize: Score it 0.0 to 1.0 (1.0 = explosive anomaly).
+3. Explain (The Y): Why is this happening?
+4. Prioritize/Decide (The Z): What is the specific business/creator action to take?
 
 Return STRICT JSON with no other text:
 {
   "categories": ["list", "of", "relevant", "categories"],
   "breakout": "high|medium|low",
   "score": 0.0 to 1.0 (float),
-  "reason": "One clear sentence explaining why this unusual 3-day spike predicts a future viral trend."
+  "reason": "The 'because Y' explanation (one sentence).",
+  "decision": "The 'so do Z' recommendation (one sentence action)."
 }
 `;
 

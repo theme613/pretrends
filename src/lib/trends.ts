@@ -8,6 +8,7 @@ export type Trend = {
   after: number;
   score: number;
   reason: string;
+  decision: string;
   demo: boolean;
   url: string | null;
 };
@@ -93,6 +94,9 @@ export function normalizeTrends(data: unknown): Trend[] {
           : 0,
         reason: String(
           item.reason ?? "Check the view counts to understand this signal.",
+        ),
+        decision: String(
+          item.decision ?? "Create content leveraging this trend immediately."
         ),
         demo,
         url: demo ? null : url,

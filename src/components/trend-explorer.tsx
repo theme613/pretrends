@@ -524,7 +524,11 @@ export default function TrendExplorer({
                         {trend.title}
                       </button>
                     </h3>
-                    <p className="card-description">{trend.reason}</p>
+                    <div className="card-description mt-2 text-sm flex flex-col gap-1.5 p-3 bg-slate-50 border border-slate-100 rounded-md">
+                      <p><span className="font-semibold text-slate-800">Predict:</span> {trend.title}</p>
+                      <p><span className="font-semibold text-slate-800">Why (Y):</span> {trend.reason}</p>
+                      <p className="text-blue-700"><span className="font-semibold">Action (Z):</span> {trend.decision}</p>
+                    </div>
                     <div className="card-metrics">
                       <span
                         className={`growth-value ${percent !== null && percent < 0 ? "growth-negative" : ""}`}
@@ -701,7 +705,11 @@ export default function TrendExplorer({
                       : `${(growth(selected) ?? 0) > 0 ? "+" : ""}${growth(selected)}%`}
                   </span>
                 </div>
-                <p>{selected.reason}</p>
+                <div className="flex flex-col gap-2 p-4 bg-slate-50 border border-slate-200 rounded-lg text-sm mt-4">
+                  <p><span className="font-bold text-slate-800">Our AI Predicts:</span> {selected.title}</p>
+                  <p><span className="font-bold text-slate-800">Why (Y):</span> {selected.reason}</p>
+                  <p className="text-blue-800"><span className="font-bold">Action (Z):</span> {selected.decision}</p>
+                </div>
                 <span className="evidence-source">
                   @{selected.creator} · {selected.platform} · Collection
                   interval unavailable
