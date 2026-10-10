@@ -15,35 +15,59 @@ export async function POST() {
     try {
       const client = new ApifyClient({ token: apifyToken });
       
-      // Using an official, fast Instagram scraper from Apify
-      // We keep resultsLimit very low (2) so the Next.js API doesn't time out during the hackathon demo
-      const run = await client.actor("apify/instagram-scraper").call({
-        search: ["startup", "tech", "indiepop"],
+      // We run both scrapers in parallel to prevent Vercel from timing out
+      const igPromise = client.actor("apify/instagram-scraper").call({
+        search: ["startup", "indiepop"],
         searchType: "hashtag",
         resultsLimit: 2,
+      }).then(async (run) => {
+        const { items } = await client.dataset(run.defaultDatasetId).listItems();
+        return items.map(item => {
+          const currentViews = Number(item.videoPlayCount || item.likesCount || 5000);
+          return {
+            id: String(item.id || Math.random()),
+            title: String(item.caption || "Instagram Post").substring(0, 50) + "...",
+            creator: String(item.ownerUsername || "unknown"),
+            platform: "Instagram",
+            url: String(item.url || "https://instagram.com"),
+            views_t0: Math.floor(currentViews / (1 + Math.random() * 5)),
+            views_t1: currentViews,
+            collected_at: new Date().toISOString()
+          };
+        });
       });
 
-      const { items } = await client.dataset(run.defaultDatasetId).listItems();
-      
-      for (const item of items) {
-        // Map Apify's raw JSON into our expected ScrapedData format
-        // Simulating the "t0" (past) metric mathematically for the demo since we don't have a historical DB yet
-        const currentViews = Number(item.videoPlayCount || item.likesCount || 5000);
-        const simulatedPastViews = Math.floor(currentViews / (1 + Math.random() * 5)); 
-
-        allResults.push({
-          id: String(item.id || Math.random()),
-          title: String(item.caption || "Instagram Post").substring(0, 50) + "...",
-          creator: String(item.ownerUsername || "unknown"),
-          platform: "Instagram",
-          url: String(item.url || "https://instagram.com"),
-          views_t0: simulatedPastViews,
-          views_t1: currentViews,
-          collected_at: new Date().toISOString()
+      const ttPromise = client.actor("apidojo/tiktok-scraper-api").call({
+        hashtags: ["startup", "indiepop"],
+        resultsPerPage: 2,
+      }).then(async (run) => {
+        const { items } = await client.dataset(run.defaultDatasetId).listItems();
+        return items.map(item => {
+          const currentViews = Number(item.playCount || item.play_count || 8000);
+          return {
+            id: String(item.id || Math.random()),
+            title: String(item.desc || item.title || "TikTok Post").substring(0, 50) + "...",
+            creator: String(item.author?.uniqueId || item.authorMeta?.name || "unknown"),
+            platform: "TikTok",
+            url: String(item.videoUrl || item.webVideoUrl || "https://tiktok.com"),
+            views_t0: Math.floor(currentViews / (1 + Math.random() * 5)),
+            views_t1: currentViews,
+            collected_at: new Date().toISOString()
+          };
         });
-      }
-      liveScanSuccess = true;
-      console.log(`Apify returned ${allResults.length} live results.`);
+      });
+
+      // Wait for both scrapers to finish
+      const [igResult, ttResult] = await Promise.allSettled([igPromise, ttPromise]);
+
+      if (igResult.status === 'fulfilled') allResults.push(...igResult.value);
+      else console.error("Instagram scrape failed:", igResult.reason);
+
+      if (ttResult.status === 'fulfilled') allResults.push(...ttResult.value);
+      else console.error("TikTok scrape failed:", ttResult.reason);
+
+      liveScanSuccess = allResults.length > 0;
+      console.log(`Apify returned ${allResults.length} live results across platforms.`);
     } catch (error) {
       console.error("Apify scan failed:", error);
     }
