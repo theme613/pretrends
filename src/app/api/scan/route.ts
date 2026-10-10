@@ -47,7 +47,7 @@ export async function POST() {
           return {
             id: String(item.id || Math.random()),
             title: String(item.desc || item.title || "TikTok Post").substring(0, 50) + "...",
-            creator: String(item.author?.uniqueId || item.authorMeta?.name || "unknown"),
+            creator: String((item.author as any)?.uniqueId || (item.authorMeta as any)?.name || "unknown"),
             platform: "TikTok",
             url: String(item.videoUrl || item.webVideoUrl || "https://tiktok.com"),
             views_t0: Math.floor(currentViews / (1 + Math.random() * 5)),
