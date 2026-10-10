@@ -97,7 +97,8 @@ Return STRICT JSON with no other text:
       categories: result.categories || [],
       breakout: result.breakout || "low",
       score: typeof result.score === 'number' ? result.score : Math.min(velocity / 5, 1),
-      reason: result.reason || `Velocity is ${velocity.toFixed(2)}x`
+      reason: result.reason || `Velocity is ${velocity.toFixed(2)}x`,
+      decision: result.decision || "Monitor closely for another 24 hours before deploying capital/effort."
     };
   } catch (error) {
     console.error("AI processing failed for", data.title, error);
@@ -107,7 +108,8 @@ Return STRICT JSON with no other text:
       categories: ["unknown"],
       breakout: velocity > 1 ? "medium" : "low",
       score: Math.min(velocity / 10, 1),
-      reason: `Velocity is ${velocity.toFixed(2)}x (fallback due to AI error).`
+      reason: `Velocity is ${velocity.toFixed(2)}x (fallback due to AI error).`,
+      decision: "Monitor closely for another 24 hours before deploying capital/effort."
     };
   }
 }

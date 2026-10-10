@@ -28,15 +28,15 @@ export async function POST() {
       for (const item of items) {
         // Map Apify's raw JSON into our expected ScrapedData format
         // Simulating the "t0" (past) metric mathematically for the demo since we don't have a historical DB yet
-        const currentViews = item.videoPlayCount || item.likesCount || 5000;
+        const currentViews = Number(item.videoPlayCount || item.likesCount || 5000);
         const simulatedPastViews = Math.floor(currentViews / (1 + Math.random() * 5)); 
 
         allResults.push({
-          id: item.id || Math.random().toString(),
+          id: String(item.id || Math.random()),
           title: String(item.caption || "Instagram Post").substring(0, 50) + "...",
-          creator: item.ownerUsername || "unknown",
+          creator: String(item.ownerUsername || "unknown"),
           platform: "Instagram",
-          url: item.url || "https://instagram.com",
+          url: String(item.url || "https://instagram.com"),
           views_t0: simulatedPastViews,
           views_t1: currentViews,
           collected_at: new Date().toISOString()
