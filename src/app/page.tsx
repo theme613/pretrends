@@ -5,4 +5,3 @@ import { normalizeTrends } from "@/lib/trends";
 export default function Home() {
   return <TrendExplorer initialTrends={normalizeTrends(seedTrends)} />;
 }
-}
