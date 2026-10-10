@@ -24,12 +24,13 @@ export async function POST() {
         const { items } = await client.dataset(run.defaultDatasetId).listItems();
         return items.map(item => {
           const currentViews = Number(item.videoPlayCount || item.likesCount || 5000);
+          const igUrl = item.url || item.postUrl || (item.shortCode ? `https://instagram.com/p/${item.shortCode}` : null) || "https://instagram.com";
           return {
             id: String(item.id || Math.random()),
             title: String(item.caption || "Instagram Post").substring(0, 50) + "...",
             creator: String(item.ownerUsername || "unknown"),
             platform: "Instagram",
-            url: String(item.url || "https://instagram.com"),
+            url: String(igUrl),
             views_t0: Math.floor(currentViews / (1 + Math.random() * 5)),
             views_t1: currentViews,
             collected_at: new Date().toISOString()
@@ -44,12 +45,20 @@ export async function POST() {
         const { items } = await client.dataset(run.defaultDatasetId).listItems();
         return items.map(item => {
           const currentViews = Number(item.playCount || item.play_count || 8000);
+          const authorId = (item.author as any)?.uniqueId || (item.authorMeta as any)?.name || "unknown";
+          
+          // Try multiple common TikTok URL fields from different scraper versions
+          let ttUrl = item.videoUrl || item.webVideoUrl || item.share_url || (item.video as any)?.share_url;
+          if (!ttUrl && item.id && authorId !== "unknown") {
+             ttUrl = `https://www.tiktok.com/@${authorId}/video/${item.id}`;
+          }
+          
           return {
             id: String(item.id || Math.random()),
             title: String(item.desc || item.title || "TikTok Post").substring(0, 50) + "...",
-            creator: String((item.author as any)?.uniqueId || (item.authorMeta as any)?.name || "unknown"),
+            creator: String(authorId),
             platform: "TikTok",
-            url: String(item.videoUrl || item.webVideoUrl || "https://tiktok.com"),
+            url: String(ttUrl || "https://tiktok.com"),
             views_t0: Math.floor(currentViews / (1 + Math.random() * 5)),
             views_t1: currentViews,
             collected_at: new Date().toISOString()
