@@ -38,7 +38,7 @@ export function allowedMediaUrl(url: string) {
 }
 
 async function downloadVideo(url: string, parentSignal: AbortSignal) {
-  const signal = AbortSignal.any([parentSignal, AbortSignal.timeout(45000)]);
+  const signal = AbortSignal.any([parentSignal, AbortSignal.timeout(12000)]);
   for (let redirect = 0; redirect < 4; redirect++) {
     if (!allowedMediaUrl(url)) throw new Error("Unsupported video media host.");
     let response: Response | undefined;
@@ -99,13 +99,32 @@ async function downloadVideo(url: string, parentSignal: AbortSignal) {
   throw new Error("Too many video redirects.");
 }
 
+async function getFfmpeg(): Promise<string> {
+  if (!ffmpegPath) throw new Error("FFmpeg is unavailable on this server.");
+  if (process.platform === "win32") return ffmpegPath;
+  try {
+    await fs.access(ffmpegPath, fs.constants.X_OK);
+    return ffmpegPath;
+  } catch {
+    const tmpFfmpeg = path.join(os.tmpdir(), "ffmpeg");
+    try {
+      await fs.access(tmpFfmpeg, fs.constants.X_OK);
+      return tmpFfmpeg;
+    } catch {
+      await fs.copyFile(ffmpegPath, tmpFfmpeg);
+      await fs.chmod(tmpFfmpeg, 0o755);
+      return tmpFfmpeg;
+    }
+  }
+}
+
 // Only three small frames are sent to AI; full videos never enter the prompt.
 export async function extractFrames(
   videoUrl: string,
   signal = AbortSignal.timeout(75000),
   timings?: { download_ms: number; frame_ms: number },
 ): Promise<string[]> {
-  if (!ffmpegPath) throw new Error("FFmpeg is unavailable on this server.");
+  const bin = await getFfmpeg();
   const directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "pretrends-frames-"),
   );
@@ -117,7 +136,7 @@ export async function extractFrames(
     const frameStarted = Date.now();
     let metadata = "";
     try {
-      await execute(ffmpegPath, ["-hide_banner", "-i", video], {
+      await execute(bin, ["-hide_banner", "-i", video], {
         signal,
         timeout: 10000,
         maxBuffer: 1024 * 1024,
@@ -136,7 +155,7 @@ export async function extractFrames(
     const frames: string[] = [];
     for (const fraction of [0.1, 0.5, 0.9]) {
       const { stdout } = await execute(
-        ffmpegPath,
+        bin,
         [
           "-hide_banner",
           "-loglevel",

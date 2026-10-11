@@ -26,11 +26,17 @@ export async function readPreview(key: string) {
   }
   if (process.env.BLOB_READ_WRITE_TOKEN) {
     try {
-      const { list } = await import("@vercel/blob");
-      const { blobs } = await list({ prefix: `previews/${key}.jpg` });
-      const match = blobs.find((b) => b.pathname === `previews/${key}.jpg`);
-      if (match) {
-        const res = await fetch(match.url);
+      const { head, list } = await import("@vercel/blob");
+      let url: string | undefined;
+      try {
+        const h = await head(`previews/${key}.jpg`);
+        url = h?.url;
+      } catch {
+        const { blobs } = await list({ prefix: `previews/${key}.jpg` });
+        url = blobs.find((b) => b.pathname === `previews/${key}.jpg` || b.pathname.endsWith(`${key}.jpg`))?.url;
+      }
+      if (url) {
+        const res = await fetch(url);
         if (res.ok) {
           const buffer = Buffer.from(await res.arrayBuffer());
           await fs.mkdir(directory, { recursive: true }).catch(() => {});
@@ -54,7 +60,7 @@ export async function savePreview(key: string, frame: string) {
   if (process.env.BLOB_READ_WRITE_TOKEN) {
     try {
       const { put } = await import("@vercel/blob");
-      await put(`previews/${key}.jpg`, bytes, { access: "public", addRandomSuffix: false });
+      await put(`previews/${key}.jpg`, bytes, { access: "public", addRandomSuffix: false, allowOverwrite: true });
     } catch (error) {
       console.error("Vercel Blob preview sync error:", error);
     }
@@ -64,7 +70,7 @@ export async function savePreview(key: string, frame: string) {
 // Share work across cards, the popup, route bundles and development reloads.
 const globalState = globalThis as typeof globalThis & { trendPreviews?: { active: number; pending: Map<string, Promise<Buffer>>; failed: Map<string, number> } };
 const state = globalState.trendPreviews ||= { active: 0, pending: new Map(), failed: new Map() };
-async function thumbnail(url: string, signal: AbortSignal) {
+export async function thumbnail(url: string, signal: AbortSignal) {
   for (let redirect = 0; redirect < 4; redirect++) {
     if (!allowedMediaUrl(url)) throw new Error("Unsupported thumbnail host.");
     const response = await fetch(url, { signal, redirect: "manual" });

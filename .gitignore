@@ -53,6 +53,7 @@ venv/
 
 # app data
 /data/scans/*.json
+!/data/scans/collection-index.json
 !/data/trends.json
 
 /data/previews/

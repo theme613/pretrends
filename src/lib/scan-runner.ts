@@ -41,7 +41,9 @@ type Dependencies = { scrape: typeof scrape; process: typeof processCandidates; 
   save: typeof saveScan; latest: typeof latestTrends };
 export async function runScan(job: ScanJob, overrides: Partial<Dependencies> = {}) {
   const io: Dependencies = { scrape, process: processCandidates, read: readScans, save: saveScan, latest: latestTrends, ...overrides };
-  const started = Date.parse(job.started_at), deadline = started + 14 * 60000;
+  const started = Date.parse(job.started_at);
+  const deadline = started + (job.mode === "refresh" ? 48000 : 14 * 60000);
+  const processDeadline = job.mode === "refresh" ? deadline - 3000 : deadline - 90000;
   const session = createAnalysisSession(job.mode === "refresh" ? 12 : 250, job.mode === "refresh" ? 15 : 300);
   let writer: Promise<void> = Promise.resolve();
   const completed: TrendCandidate[] = [], seen = new Set<string>();
@@ -101,7 +103,8 @@ export async function runScan(job: ScanJob, overrides: Partial<Dependencies> = {
           : fallback(post, "Waiting for a visual check.");
       }), result.verifications);
       job.stage = "Checking video content";
-      await io.process(observations, undefined, checks, deadline - 90000, {
+      const toProcess = job.mode === "refresh" ? observations.slice(0, 6) : observations;
+      await io.process(toProcess, undefined, checks, processDeadline, {
         session,
         onResult: async (post) => {
           await publish([post]);

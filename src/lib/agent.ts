@@ -8,7 +8,7 @@ import {
   type SourceStatus,
 } from "./post-policy";
 import { extractFrames } from "./video-frames";
-import { previewKey, savePreview } from "./previews";
+import { previewKey, savePreview, thumbnail } from "./previews";
 
 export interface ScrapedData {
   id: string;
@@ -269,9 +269,22 @@ export async function processCandidates(
       session.newChecks++;
       const timings = { download_ms: 0, frame_ms: 0, ai_ms: 0 };
       try {
-        if (!post.video_url) throw new Error("The scraper did not provide playable video media.");
-        const signal = AbortSignal.timeout(Math.min(75000, Math.max(1, deadline - Date.now())));
-        const frames = await (options.extract || extractFrames)(post.video_url, signal, timings);
+        const signal = AbortSignal.timeout(Math.min(25000, Math.max(1, deadline - Date.now())));
+        let frames: string[] | undefined;
+        if (post.video_url) {
+          try {
+            frames = await (options.extract || extractFrames)(post.video_url, signal, timings);
+          } catch {
+            /* video extraction failed or timed out, try image fallback */
+          }
+        }
+        if (!frames && post.image) {
+          try {
+            const frame = await thumbnail(post.image, signal);
+            if (frame) frames = [frame, frame, frame];
+          } catch {}
+        }
+        if (!frames) throw new Error("The scraper did not provide playable video or image media.");
         const preview_key = await savePreview(previewKey(post), frames[0]).catch(() => undefined);
         const started = Date.now();
         const analysis = await (options.analyze || analyzeFrames)(post, frames, signal, session);

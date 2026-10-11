@@ -225,7 +225,7 @@ async function syncBlob(pathname: string, data: string) {
   if (!process.env.BLOB_READ_WRITE_TOKEN) return;
   try {
     const { put } = await import("@vercel/blob");
-    await put(pathname, data, { access: "public", addRandomSuffix: false });
+    await put(pathname, data, { access: "public", addRandomSuffix: false, allowOverwrite: true });
   } catch (error) {
     console.error("Vercel Blob sync error:", error);
   }
@@ -233,7 +233,16 @@ async function syncBlob(pathname: string, data: string) {
 async function fetchBlob(pathname: string): Promise<string | null> {
   if (!process.env.BLOB_READ_WRITE_TOKEN) return null;
   try {
-    const { list } = await import("@vercel/blob");
+    const { head, list } = await import("@vercel/blob");
+    try {
+      const h = await head(pathname);
+      if (h?.url) {
+        const res = await fetch(h.url, { cache: "no-store" });
+        if (res.ok) return await res.text();
+      }
+    } catch {
+      /* head might fail if not found yet */
+    }
     const { blobs } = await list({ prefix: pathname });
     if (!blobs.length) return null;
     const sorted = blobs.sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
@@ -280,8 +289,12 @@ async function indexedCandidates(): Promise<TrendCandidate[]> {
   try {
     const index = JSON.parse(await fs.readFile(indexFile, "utf8"));
     if (index.version === 1 && (!signature || index.signature === signature) && Array.isArray(index.candidates) &&
-        index.candidates.every((post: TrendCandidate) => post && typeof post.id === "string" && typeof post.platform === "string"))
+        index.candidates.every((post: TrendCandidate) => post && typeof post.id === "string" && typeof post.platform === "string")) {
+      if (process.env.BLOB_READ_WRITE_TOKEN && index.candidates.length > 0) {
+        await syncBlob("scans/collection-index.json", JSON.stringify(index)).catch(() => {});
+      }
       return index.candidates;
+    }
   } catch {
     const candidates = mergeScans(await readScans());
     try {
