@@ -42,15 +42,20 @@ type Dependencies = { scrape: typeof scrape; process: typeof processCandidates; 
 export async function runScan(job: ScanJob, overrides: Partial<Dependencies> = {}) {
   const io: Dependencies = { scrape, process: processCandidates, read: readScans, save: saveScan, latest: latestTrends, ...overrides };
   const started = Date.parse(job.started_at);
-  const deadline = started + (job.mode === "refresh" ? 48000 : 14 * 60000);
-  const processDeadline = job.mode === "refresh" ? deadline - 3000 : deadline - 90000;
+  const localPreparation = job.mode === "prepare" && !process.env.VERCEL;
+  // Vercel's route has 300 seconds. Finish external work before that limit so
+  // the final saved collection and response still have time to complete.
+  const deadline = started + (localPreparation ? 14 * 60000 : 270000);
+  const processDeadline = deadline - 10000;
+  const scrapeDeadline = Math.min(processDeadline, started + (localPreparation ? 510000 : 120000));
+  const signal = AbortSignal.timeout(Math.max(1, deadline - Date.now()));
   const session = createAnalysisSession(job.mode === "refresh" ? 12 : 250, job.mode === "refresh" ? 15 : 300);
   let writer: Promise<void> = Promise.resolve();
   const completed: TrendCandidate[] = [], seen = new Set<string>();
   let scrapedCount = 0;
   const publish = (candidates: TrendCandidate[], verifications: Verification[] = []) => {
     const saved = writer.then(async () => {
-      await io.save({ timestamp: new Date().toISOString(), candidates, verifications });
+      await io.save({ timestamp: new Date().toISOString(), candidates, verifications }, signal);
       job.revision++;
       if (job.metrics.first_result_ms === null && candidates.some((post) => isEligiblePost(post)))
         job.metrics.first_result_ms = Date.now() - started;
@@ -62,7 +67,7 @@ export async function runScan(job: ScanJob, overrides: Partial<Dependencies> = {
     cache_hits: session.cacheHits, ai_attempts: session.attempts, new_checks: session.newChecks,
     input_tokens: session.inputTokens, output_tokens: session.outputTokens });
   try {
-    const scans = await io.read(), stored = mergeScans(scans), checks = contentChecksFromHistory(scans);
+    const scans = await io.read(signal), stored = mergeScans(scans), checks = contentChecksFromHistory(scans);
     const knownIds = new Set(stored.map((post) => `${post.platform}:${post.id}`));
     const selected = job.filters.categories;
     const topics = selected.length ? [...new Set(selected.flatMap((category) =>
@@ -80,10 +85,9 @@ export async function runScan(job: ScanJob, overrides: Partial<Dependencies> = {
       let result: Awaited<ReturnType<typeof scrape>>;
       try {
         result = await io.scrape(platform, topics, job.mode === "refresh" ? 20 : 300, known,
-          { maxChargeUsd: job.mode === "refresh" ? 0.25 : 1 });
+          { maxChargeUsd: job.mode === "refresh" ? 0.25 : 1, deadline: scrapeDeadline });
       } catch (error) {
         job.warnings.push(error instanceof Error ? error.message : `${platform} could not be scanned.`);
-        await publish([], known.map((post) => ({ id: post.id, platform, status: "unverified", checked_at: new Date().toISOString() })));
         return;
       }
       job.metrics.scraper_ms[platform] = result.scrape_ms;
@@ -130,20 +134,23 @@ export async function runScan(job: ScanJob, overrides: Partial<Dependencies> = {
     if (session.stopped) job.warnings.push(session.stopped);
     const failures = [...new Set(completed.filter((post) => post.content_status !== "verified").map((post) => post.check_error).filter(Boolean))];
     job.warnings.push(...failures.slice(0, 3) as string[]);
-    if (!scrapedCount) throw new Error(job.warnings.join(" ") || "No verifiable posts were found.");
-    const eligible = await io.latest();
+    const eligible = await io.latest(signal);
+    if (!scrapedCount) {
+      if (!eligible.length) throw new Error(job.warnings.join(" ") || "No verifiable posts were found.");
+      job.warnings.push("No new posts could be collected. Your saved ideas are still available.");
+    }
     job.result = { batch: selectRefreshBatch(eligible, job.filters, job.freshIds, job.refreshedIds), live_scan: true, scraped_count: scrapedCount,
       verified_count: completed.filter((post) => isEligiblePost(post)).length,
       warnings: [...new Set(job.warnings)], ai_usage: { input_tokens: session.inputTokens, output_tokens: session.outputTokens },
       data: { timestamp: new Date().toISOString(), candidates: eligible } };
-    await io.save({ timestamp: new Date().toISOString(), candidates: [], job_id: job.id, mode: job.mode, metrics: { ...job.metrics } });
+    await io.save({ timestamp: new Date().toISOString(), candidates: [], job_id: job.id, mode: job.mode, metrics: { ...job.metrics } }, signal);
     job.warnings = job.result.warnings;
     job.stage = "Complete"; job.status = "complete";
   } catch (error) {
     job.error = error instanceof Error ? error.message : "Scan failed. Please try again.";
     job.status = "failed"; updateMetrics();
     // Best effort audit: already saved observations survive a later failure.
-    try { await io.save({ timestamp: new Date().toISOString(), candidates: [], job_id: job.id, mode: job.mode, metrics: { ...job.metrics } }); }
+    try { await io.save({ timestamp: new Date().toISOString(), candidates: [], job_id: job.id, mode: job.mode, metrics: { ...job.metrics } }, signal); }
     catch { /* The original storage/scan failure remains the user-facing error. */ }
   }
 }

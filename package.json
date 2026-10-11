@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "node --import tsx --test tests/*.test.ts",
+    "export:collection": "node --import tsx scripts/export-collection.ts",
     "test:ui": "node scripts/test_ui.mjs"
   },
   "dependencies": {

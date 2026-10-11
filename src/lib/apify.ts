@@ -110,7 +110,7 @@ export async function scrape(
   hashtags: string[],
   limit = 300,
   knownPosts: ScrapedData[] = [],
-  options: { maxChargeUsd?: number } = {},
+  options: { maxChargeUsd?: number; deadline?: number } = {},
 ): Promise<{
   posts: ScrapedData[];
   verifications: Verification[];
@@ -119,6 +119,11 @@ export async function scrape(
   scrape_ms: number;
 }> {
   const startedAt = Date.now();
+  const deadline = options.deadline ?? startedAt + 510000;
+  // Leave time to stop an unfinished actor and keep its completed dataset rows.
+  const collectionDeadline = deadline - 20000;
+  if (Date.now() >= collectionDeadline)
+    throw new Error(`${platform}: Not enough time remains to collect posts.`);
   const maxCharge = options.maxChargeUsd ?? 1;
   const actor =
     platform === "Instagram"
@@ -152,14 +157,15 @@ export async function scrape(
     Authorization: `Bearer ${process.env.APIFY_API_TOKEN}`,
     "Content-Type": "application/json",
   };
-  async function call(endpoint: string, options: RequestInit = {}) {
+  async function call(endpoint: string, options: RequestInit = {}, until = deadline) {
+    if (Date.now() >= until) throw new Error(`${platform}: Scraper time limit reached.`);
     let response: Response;
     try {
       response = await fetch(`https://api.apify.com/v2/${endpoint}`, {
         ...options,
         headers,
         cache: "no-store",
-        signal: AbortSignal.timeout(65000),
+        signal: AbortSignal.timeout(Math.min(65000, Math.max(1, until - Date.now()))),
       });
     } catch {
       throw new Error(`${platform}: Apify did not respond. Try again later.`);
@@ -175,39 +181,64 @@ export async function scrape(
     }
     return response.json();
   }
+  const actorTimeout = Math.max(1, Math.min(480, Math.floor((collectionDeadline - Date.now()) / 1000)));
   const started = await call(
-    `acts/${actor}/runs?timeout=480&maxTotalChargeUsd=${maxCharge}&waitForFinish=0`,
+    `acts/${actor}/runs?timeout=${actorTimeout}&maxTotalChargeUsd=${maxCharge}&waitForFinish=0`,
     {
       method: "POST",
       body: JSON.stringify(input),
     },
+    collectionDeadline,
   );
   let run = started.data;
   if (!run?.id || !run.defaultDatasetId)
     throw new Error(`${platform}: Apify did not return a run ID.`);
-  const deadline = Date.now() + 510000;
+  const warnings: string[] = [];
+  const running = () => ["READY", "RUNNING", "TIMING-OUT", "ABORTING"].includes(run.status);
   while (
-    ["READY", "RUNNING", "TIMING-OUT", "ABORTING"].includes(run.status) &&
-    Date.now() < deadline
+    running() && Date.now() < collectionDeadline
   ) {
-    run = (await call(`actor-runs/${run.id}?waitForFinish=60`)).data;
+    const wait = Math.max(1, Math.min(60, Math.floor((collectionDeadline - Date.now()) / 1000)));
+    try {
+      const next = (await call(`actor-runs/${run.id}?waitForFinish=${wait}`, {}, collectionDeadline)).data;
+      if (!next?.id) throw new Error(`${platform}: Apify returned an unexpected run response.`);
+      run = next;
+    } catch (error) {
+      warnings.push(error instanceof Error ? error.message : `${platform}: Could not check scraper progress.`);
+      break;
+    }
   }
-  if (run.status !== "SUCCEEDED")
-    throw new Error(
-      `${platform}: Scraper ${String(run.status).toLowerCase()}. Check the run and your credits in Apify.`,
-    );
+  if (run.status !== "SUCCEEDED") {
+    warnings.push(`${platform}: Scraper ${running() ? "reached its time limit" : String(run.status).toLowerCase()}; using posts already collected.`);
+    if (running()) {
+      try {
+        await call(`actor-runs/${run.id}/abort`, { method: "POST" }, Math.min(deadline, Date.now() + 5000));
+      } catch {
+        warnings.push(`${platform}: Could not confirm the scraper stopped; its time and charge limits still apply.`);
+      }
+    }
+  }
   // Read every raw row, including errors. Filtered pagination can skip rows and
   // falsely label known posts as missing.
   const items: unknown[] = [];
   const pageSize = 100;
   for (let offset = 0; ; offset += pageSize) {
-    const page: unknown = await call(
-      `datasets/${run.defaultDatasetId}/items?clean=false&offset=${offset}&limit=${pageSize}`,
-    );
-    if (!Array.isArray(page)) throw new Error(`${platform}: Apify returned an unexpected response.`);
-    items.push(...page);
-    if (page.length < pageSize) break;
-    if (items.length >= 10000) throw new Error(`${platform}: Dataset exceeded the safe read limit; availability is uncertain.`);
+    try {
+      const page: unknown = await call(
+        `datasets/${run.defaultDatasetId}/items?clean=false&offset=${offset}&limit=${pageSize}`,
+      );
+      if (!Array.isArray(page)) throw new Error(`${platform}: Apify returned an unexpected response.`);
+      items.push(...page);
+      if (page.length < pageSize) break;
+      if (items.length >= 10000) {
+        warnings.push(`${platform}: Dataset reached the safe read limit; using posts already read.`);
+        break;
+      }
+    } catch (error) {
+      if (!items.length) throw error;
+      warnings.push(error instanceof Error ? error.message : `${platform}: Only part of the dataset could be read.`);
+      break;
+    }
   }
   const checkedAt = new Date().toISOString();
   const posts = items.flatMap((item) => {
@@ -231,7 +262,7 @@ export async function scrape(
     ];
   });
   const found = new Set(posts.map((post) => post.id));
-  const verifications: Verification[] = knownPosts.map((post) => {
+  const verifications: Verification[] = knownPosts.flatMap((post): Verification[] => {
     const errorRow = items
       .map(object)
       .find(
@@ -249,21 +280,17 @@ export async function scrape(
         ["not-found", "not_found", "deleted", "private"].includes(
           String(errorRow.error).toLowerCase(),
         ));
-    return {
+    // A missing search result or temporary scraper error is not proof a post
+    // disappeared. Keep the existing source check until its normal expiry.
+    if (!explicitUnavailable && !found.has(post.id)) return [];
+    return [{
       id: post.id,
       platform,
       checked_at: checkedAt,
       run_id: String(run.id),
-      status: explicitUnavailable
-        ? "unavailable"
-        : errorRow
-          ? "unverified"
-          : found.has(post.id)
-            ? "available"
-            : "unverified",
-    };
+      status: explicitUnavailable ? "unavailable" : "available",
+    }];
   });
-  const warnings: string[] = [];
   if (Number(run.usageTotalUsd) >= maxCharge * 0.95 || /charge|budget|cost limit/i.test(String(run.statusMessage || "")))
     warnings.push(`${platform}: Scraper reached its charge limit; fewer posts may be available.`);
   return { posts, verifications, run_id: String(run.id), warnings, scrape_ms: Date.now() - startedAt };

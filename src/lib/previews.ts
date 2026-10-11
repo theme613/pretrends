@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { allowedMediaUrl, extractFrames } from "./video-frames";
 
 import os from "node:os";
+import { configuredBlobStore } from "./blob-store";
 
 type PreviewPost = { platform: string; id: string; caption?: string; title: string; image?: string; video_url?: string; duration_seconds?: number; published_at?: string };
 const directory = process.env.VERCEL
@@ -16,7 +17,7 @@ function previewPath(key: string) {
   if (!/^[a-f0-9]{64}$/.test(key)) throw new Error("Invalid preview key.");
   return path.join(directory, `${key}.jpg`);
 }
-export async function readPreview(key: string) {
+export async function readPreview(key: string, signal?: AbortSignal) {
   if (!/^[a-f0-9]{64}$/.test(key)) throw new Error("Invalid preview key.");
   const defaultDir = path.join(process.cwd(), "data", "previews");
   const dirs = directory === defaultDir ? [directory] : [directory, defaultDir];
@@ -24,46 +25,31 @@ export async function readPreview(key: string) {
     try { return await fs.readFile(path.join(dir, `${key}.jpg`)); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
-  if (process.env.BLOB_READ_WRITE_TOKEN) {
-    try {
-      const { head, list } = await import("@vercel/blob");
-      let url: string | undefined;
-      try {
-        const h = await head(`previews/${key}.jpg`);
-        url = h?.url;
-      } catch {
-        const { blobs } = await list({ prefix: `previews/${key}.jpg` });
-        url = blobs.find((b) => b.pathname === `previews/${key}.jpg` || b.pathname.endsWith(`${key}.jpg`))?.url;
-      }
-      if (url) {
-        const res = await fetch(url);
-        if (res.ok) {
-          const buffer = Buffer.from(await res.arrayBuffer());
-          await fs.mkdir(directory, { recursive: true }).catch(() => {});
-          await fs.writeFile(path.join(directory, `${key}.jpg`), buffer).catch(() => {});
-          return buffer;
-        }
-      }
-    } catch {}
+  const cloud = configuredBlobStore();
+  if (cloud) {
+    const buffer = await cloud.read(`previews/${key}.jpg`, signal);
+    if (buffer) {
+      await fs.mkdir(directory, { recursive: true }).catch(() => undefined);
+      await fs.writeFile(path.join(directory, `${key}.jpg`), buffer).catch(() => undefined);
+      return buffer;
+    }
   }
   return null;
 }
-export async function savePreview(key: string, frame: string) {
+export async function savePreview(key: string, frame: string, signal?: AbortSignal) {
   if (!frame.startsWith("data:image/jpeg;base64,")) throw new Error("Invalid preview frame.");
   const bytes = Buffer.from(frame.slice(23), "base64");
   if (bytes.length < 3 || bytes.length > 2 * 1024 * 1024 || bytes[0] !== 255 || bytes[1] !== 216) throw new Error("Invalid preview image.");
   const destination = previewPath(key);
-  await fs.mkdir(directory, { recursive: true });
-  const temporary = `${destination}.${randomUUID()}.tmp`;
-  try { await fs.writeFile(temporary, bytes); await fs.rename(temporary, destination); }
-  finally { await fs.rm(temporary, { force: true }); }
-  if (process.env.BLOB_READ_WRITE_TOKEN) {
-    try {
-      const { put } = await import("@vercel/blob");
-      await put(`previews/${key}.jpg`, bytes, { access: "public", addRandomSuffix: false, allowOverwrite: true });
-    } catch (error) {
-      console.error("Vercel Blob preview sync error:", error);
-    }
+  const cloud = configuredBlobStore();
+  if (cloud) await cloud.write(`previews/${key}.jpg`, bytes, signal, true);
+  try {
+    await fs.mkdir(directory, { recursive: true });
+    const temporary = `${destination}.${randomUUID()}.tmp`;
+    try { await fs.writeFile(temporary, bytes); await fs.rename(temporary, destination); }
+    finally { await fs.rm(temporary, { force: true }); }
+  } catch (error) {
+    if (!cloud) throw error; // Cloud persistence succeeded; the disk is only a cache.
   }
   return key;
 }

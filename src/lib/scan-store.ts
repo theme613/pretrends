@@ -10,15 +10,8 @@ import {
 import os from "node:os";
 import { previewKey } from "./previews";
 import { calculateForecast } from "./forecast";
+import { configuredBlobStore, type BlobStore } from "./blob-store";
 
-const directory = path.join(process.cwd(), "data", "scans");
-const writableDirectory = process.env.VERCEL
-  ? path.join(os.tmpdir(), "pretrends-scans")
-  : directory;
-const indexFile = path.join(directory, "collection-index.json");
-const writableIndexFile = path.join(writableDirectory, "collection-index.json");
-// Share the queue across route bundles and development reloads in this process.
-const storeState = globalThis as typeof globalThis & { pretrendsStoreWrites?: Promise<void> };
 export type Scan = {
   timestamp: string;
   candidates: TrendCandidate[];
@@ -28,43 +21,24 @@ export type Scan = {
   metrics?: object;
 };
 
-export async function readScans(): Promise<Scan[]> {
-  const scans: Scan[] = [];
-  try {
-    const names = await fs.readdir(directory);
-    for (const name of names.filter((name) => name.startsWith("scan_") && name.endsWith(".json"))) {
-      try {
-        const data = JSON.parse(
-          await fs.readFile(path.join(directory, name), "utf8"),
-        );
-        if (typeof data.timestamp === "string" && Array.isArray(data.candidates))
-          scans.push(data);
-      } catch {
-        /* Ignore incomplete old scan files. */
-      }
-    }
-  } catch {
-    /* Directory may not exist */
-  }
-  if (writableDirectory !== directory) {
-    try {
-      const names = await fs.readdir(writableDirectory);
-      for (const name of names.filter((name) => name.startsWith("scan_") && name.endsWith(".json"))) {
-        try {
-          const data = JSON.parse(
-            await fs.readFile(path.join(writableDirectory, name), "utf8"),
-          );
-          if (typeof data.timestamp === "string" && Array.isArray(data.candidates))
-            scans.push(data);
-        } catch {
-          /* Ignore incomplete old scan files. */
-        }
-      }
-    } catch {
-      /* Directory may not exist yet */
-    }
-  }
-  return scans.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+function mergeCandidate(first: TrendCandidate, second: TrendCandidate): TrendCandidate {
+  const time = (value?: string) => Date.parse(value || "") || 0;
+  const observation = time(first.collected_at) >= time(second.collected_at) ? first : second;
+  const source = time(first.source_verified_at) >= time(second.source_verified_at) ? first : second;
+  // A pending raw observation can reuse evidence for unchanged content. An
+  // actual newer failed/uncertain check must never revive older success.
+  const matching = [first, second].filter((post) => previewKey(post) === previewKey(observation));
+  const checked = matching.sort((a, b) =>
+    time(b.content_checked_at || (b.content_status === "verified" ? b.collected_at : undefined)) -
+    time(a.content_checked_at || (a.content_status === "verified" ? a.collected_at : undefined)))[0];
+  const { id, title, creator, platform, url, caption, short_code, video_url,
+    duration_seconds, published_at, image, views_t0, views_t1, collected_at,
+    baseline_at, has_baseline, snapshots } = observation;
+  return { ...checked, id, title, creator, platform, url, caption, short_code, video_url,
+    duration_seconds, published_at, image, views_t0, views_t1, collected_at,
+    baseline_at, has_baseline, snapshots,
+    source_status: source.source_status, source_verified_at: source.source_verified_at,
+    source_run_id: source.source_run_id };
 }
 
 export function mergeScans(scans: Scan[]): TrendCandidate[] {
@@ -86,23 +60,16 @@ export function mergeScans(scans: Scan[]): TrendCandidate[] {
       const existing = posts.get(key);
       if (!existing) {
         posts.set(key, post);
-      } else if (existing.content_status !== "verified" && post.content_status === "verified") {
-        posts.set(key, post);
-      } else if (existing.content_status === "verified" && post.content_status !== "verified") {
-        posts.set(key, {
-          ...existing,
-          views_t1: post.views_t1 ?? existing.views_t1,
-          collected_at: post.collected_at || existing.collected_at,
-          source_status: post.source_status || existing.source_status,
-          source_verified_at: post.source_verified_at || existing.source_verified_at,
-          source_run_id: post.source_run_id || existing.source_run_id,
-        });
-      }
+      } else posts.set(key, mergeCandidate(existing, post));
 
       if (!postObservations.has(key)) {
         postObservations.set(key, new Map());
       }
       const obsMap = postObservations.get(key)!;
+      for (const snapshot of post.snapshots || []) {
+        if (Number.isFinite(Date.parse(snapshot.timestamp)) && Number.isSafeInteger(snapshot.views) && snapshot.views >= 0)
+          obsMap.set(snapshot.timestamp, snapshot.views);
+      }
       if (
         post.has_baseline &&
         post.baseline_at &&
@@ -212,153 +179,146 @@ export function mergeScans(scans: Scan[]): TrendCandidate[] {
   });
 }
 
-function serialized<T>(work: () => Promise<T>): Promise<T> {
-  const operation = (storeState.pretrendsStoreWrites || Promise.resolve()).then(work);
-  storeState.pretrendsStoreWrites = operation.then(() => undefined, () => undefined);
-  return operation;
-}
-async function historySignature() {
-  const names: string[] = [];
-  try {
-    const entries = (await fs.readdir(directory)).filter((name) => name.startsWith("scan_") && name.endsWith(".json"));
-    names.push(...entries);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+// Every cloud scan has a unique name. Immutable history is authoritative;
+// an overwritten collection index can be stale and loses concurrent updates.
+export function createScanStore(options: {
+  directory: string;
+  writableDirectory?: string;
+  cloud?: BlobStore;
+}) {
+  const directory = options.directory;
+  const writableDirectory = options.writableDirectory || directory;
+  const cloud = options.cloud;
+  const remoteScans = new Map<string, Scan>();
+  let legacyIndex: Scan | undefined;
+  let writer: Promise<void> = Promise.resolve();
+
+  function serialized<T>(work: () => Promise<T>): Promise<T> {
+    const operation = writer.then(work);
+    writer = operation.then(() => undefined, () => undefined);
+    return operation;
   }
-  if (writableDirectory !== directory) {
-    try {
-      const entries = (await fs.readdir(writableDirectory)).filter((name) => name.startsWith("scan_") && name.endsWith(".json"));
-      names.push(...entries);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
+  function validScan(value: unknown): value is Scan {
+    if (!value || typeof value !== "object") return false;
+    const scan = value as Scan;
+    return typeof scan.timestamp === "string" && Array.isArray(scan.candidates) &&
+      scan.candidates.every((post) => post && typeof post.id === "string" && typeof post.platform === "string");
   }
-  return [...new Set(names)].sort().join("|");
-}
-async function syncBlob(pathname: string, data: string) {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) return;
-  try {
-    const { put } = await import("@vercel/blob");
-    await put(pathname, data, { access: "public", addRandomSuffix: false, allowOverwrite: true });
-  } catch (error) {
-    console.error("Vercel Blob sync error:", error);
+  function parseIndex(text: string): Scan | undefined {
+    const index = JSON.parse(text);
+    const scan = { timestamp: "1970-01-01", candidates: index.candidates };
+    return index.version === 1 && validScan(scan) ? scan : undefined;
   }
-}
-async function fetchBlob(pathname: string): Promise<string | null> {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) return null;
-  try {
-    const { head, list } = await import("@vercel/blob");
-    try {
-      const h = await head(pathname);
-      if (h?.url) {
-        const res = await fetch(h.url, { cache: "no-store" });
-        if (res.ok) return await res.text();
+  async function localHistory() {
+    const scans = new Map<string, Scan>();
+    for (const folder of new Set([directory, writableDirectory])) {
+      let names: string[];
+      try { names = await fs.readdir(folder); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
       }
-    } catch {
-      /* head might fail if not found yet */
+      for (const name of names.filter((entry) => /^scan_.*\.json$/.test(entry))) {
+        try {
+          const scan = JSON.parse(await fs.readFile(path.join(folder, name), "utf8"));
+          if (validScan(scan)) scans.set(name, scan);
+        } catch { /* Incomplete legacy files are not valid observations. */ }
+      }
     }
-    const { blobs } = await list({ prefix: pathname });
-    if (!blobs.length) return null;
-    const sorted = blobs.sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
-    const match = sorted.find((b) => b.pathname === pathname || b.pathname.endsWith(pathname)) || sorted[0];
-    if (!match) return null;
-    const res = await fetch(match.url, { cache: "no-store" });
-    if (!res.ok) return null;
-    return await res.text();
-  } catch (error) {
-    console.error("fetchBlob error:", error);
-    return null;
+    return scans;
   }
+  async function history(signal = AbortSignal.timeout(25000)): Promise<Scan[]> {
+    const local = await localHistory();
+    let seed: Scan | undefined;
+    try { seed = parseIndex(await fs.readFile(path.join(directory, "collection-index.json"), "utf8")); }
+    catch (error) {
+      if (!(error instanceof SyntaxError) && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (cloud) {
+      const names = await cloud.list("scans/", signal);
+      const missing = names.filter((name) => /^scans\/scan_.*\.json$/.test(name) && !remoteScans.has(name));
+      let next = 0;
+      // Download each immutable file once per instance, with bounded concurrency.
+      await Promise.all(Array.from({ length: Math.min(6, missing.length) }, async () => {
+        while (next < missing.length) {
+          const name = missing[next++];
+          const bytes = await cloud.read(name, signal);
+          if (!bytes) throw new Error("A saved cloud scan could not be read. Try again.");
+          const scan = JSON.parse(bytes.toString("utf8"));
+          if (!validScan(scan)) throw new Error("A saved cloud scan is invalid.");
+          remoteScans.set(name, scan);
+        }
+      }));
+      // Recover data written before immutable history became authoritative.
+      // Never upload a bundled seed as a side effect of reading the page.
+      if (!legacyIndex && names.includes("scans/collection-index.json")) {
+        const bytes = await cloud.read("scans/collection-index.json", signal);
+        if (!bytes || !(legacyIndex = parseIndex(bytes.toString("utf8"))))
+          throw new Error("The saved cloud collection could not be read.");
+      }
+      for (const [name, scan] of remoteScans) local.set(name.slice("scans/".length), scan);
+    }
+    const scans = [...local.values()];
+    if (legacyIndex) scans.push(legacyIndex);
+    if (seed) {
+      // In local mode the index also acts as a recovery seed. Avoid counting a
+      // derived index twice when all of its posts already have local history.
+      const known = new Set(scans.flatMap((scan) => scan.candidates.map((post) => `${post.platform}:${post.id}`)));
+      const candidates = writableDirectory !== directory || cloud
+        ? seed.candidates
+        : seed.candidates.filter((post) => !known.has(`${post.platform}:${post.id}`));
+      if (candidates.length) scans.push({ ...seed, candidates });
+    }
+    return scans.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  }
+  async function writeLocal(scan: Scan, name: string) {
+    await fs.mkdir(writableDirectory, { recursive: true });
+    const filename = path.join(writableDirectory, name);
+    const temporary = `${filename}.${randomUUID()}.tmp`;
+    try {
+      await fs.writeFile(temporary, JSON.stringify(scan));
+      await fs.rename(temporary, filename);
+    } finally { await fs.rm(temporary, { force: true }); }
+  }
+  return {
+    readScans: (signal?: AbortSignal) => serialized(() => history(signal)),
+    latestTrends: (signal?: AbortSignal): Promise<TrendCandidate[]> => serialized(async () => mergeScans(await history(signal))
+      .filter((post) => isEligiblePost(post))
+      .map((post) => ({ ...post, preview_key: previewKey(post) }))),
+    saveScan: (scan: Scan, signal?: AbortSignal) => serialized(async () => {
+      const name = `scan_${Date.now()}_${randomUUID()}.json`;
+      if (cloud) {
+        // Only report a successful save after shared durable storage accepts it.
+        // There is no read/modify/write race between separate server instances.
+        await cloud.write(`scans/${name}`, JSON.stringify(scan), signal);
+        remoteScans.set(`scans/${name}`, scan);
+        await writeLocal(scan, name).catch(() => undefined); // Optional warm cache.
+        return;
+      }
+      // Capture bundled-only posts before rebuilding the local index.
+      const current = await history(signal);
+      await writeLocal(scan, name);
+      const candidates = mergeScans([scan, ...current]);
+      const index = path.join(writableDirectory, "collection-index.json");
+      const temporary = `${index}.${randomUUID()}.tmp`;
+      try {
+        await fs.writeFile(temporary, JSON.stringify({ version: 1, candidates }));
+        await fs.rename(temporary, index);
+      } finally { await fs.rm(temporary, { force: true }); }
+    }),
+  };
 }
 
-async function indexedCandidates(): Promise<TrendCandidate[]> {
-  if (process.env.BLOB_READ_WRITE_TOKEN) {
-    try {
-      const blobText = await fetchBlob("scans/collection-index.json");
-      if (blobText) {
-        const index = JSON.parse(blobText);
-        if (index.version === 1 && Array.isArray(index.candidates) &&
-            index.candidates.every((post: TrendCandidate) => post && typeof post.id === "string" && typeof post.platform === "string")) {
-          await fs.mkdir(writableDirectory, { recursive: true }).catch(() => {});
-          await fs.writeFile(writableIndexFile, blobText).catch(() => {});
-          let diskCandidates: TrendCandidate[] = [];
-          try {
-            const diskIndex = JSON.parse(await fs.readFile(indexFile, "utf8"));
-            if (diskIndex.version === 1 && Array.isArray(diskIndex.candidates)) {
-              diskCandidates = diskIndex.candidates;
-            }
-          } catch {
-            /* ignore */
-          }
-          if (diskCandidates.length > 0) {
-            return mergeScans([
-              { timestamp: new Date().toISOString(), candidates: index.candidates },
-              { timestamp: "1970-01-01", candidates: diskCandidates },
-            ]);
-          }
-          return index.candidates;
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-  }
-  const signature = await historySignature();
-  if (writableDirectory !== directory) {
-    try {
-      const index = JSON.parse(await fs.readFile(writableIndexFile, "utf8"));
-      if (index.version === 1 && Array.isArray(index.candidates) &&
-          index.candidates.every((post: TrendCandidate) => post && typeof post.id === "string" && typeof post.platform === "string") &&
-          index.candidates.length > 0)
-        return index.candidates;
-    } catch {
-      /* ignore */
-    }
-  }
-  try {
-    const index = JSON.parse(await fs.readFile(indexFile, "utf8"));
-    if (index.version === 1 && (!signature || index.signature === signature) && Array.isArray(index.candidates) &&
-        index.candidates.every((post: TrendCandidate) => post && typeof post.id === "string" && typeof post.platform === "string")) {
-      if (process.env.BLOB_READ_WRITE_TOKEN && index.candidates.length > 0) {
-        await syncBlob("scans/collection-index.json", JSON.stringify(index)).catch(() => {});
-      }
-      return index.candidates;
-    }
-  } catch {
-    const candidates = mergeScans(await readScans());
-    try {
-      await writeIndex(candidates);
-    } catch {
-      /* ignore write failure in read-only environment */
-    }
-    return candidates;
-  }
-  const candidates = mergeScans(await readScans());
-  try {
-    await writeIndex(candidates);
-  } catch {
-    /* ignore write failure in read-only environment */
-  }
-  return candidates;
-}
-export function latestTrends(): Promise<TrendCandidate[]> {
-  return serialized(async () => (await indexedCandidates()).filter((post) => isEligiblePost(post)).map((post) => ({ ...post, preview_key: previewKey(post) })));
-}
-async function writeIndex(candidates: TrendCandidate[]) {
-  try {
-    await fs.mkdir(writableDirectory, { recursive: true });
-    const content = JSON.stringify({ version: 1, signature: await historySignature(), candidates });
-    const temporary = `${writableIndexFile}.${randomUUID()}.tmp`;
-    await fs.writeFile(temporary, content);
-    await fs.rename(temporary, writableIndexFile);
-    await syncBlob("scans/collection-index.json", content);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EROFS") {
-      return;
-    }
-    throw error;
-  }
-}
+const directory = path.join(process.cwd(), "data", "scans");
+const state = globalThis as typeof globalThis & { pretrendsScanStore?: ReturnType<typeof createScanStore> };
+const store = state.pretrendsScanStore ||= createScanStore({
+  directory,
+  writableDirectory: process.env.VERCEL ? path.join(os.tmpdir(), "pretrends-scans") : directory,
+  cloud: configuredBlobStore(),
+});
+export const readScans = store.readScans;
+export const latestTrends = store.latestTrends;
+export const saveScan = store.saveScan;
 
 function sameSourceObservation(candidate: TrendCandidate, post: ScrapedData) {
   try {
@@ -409,27 +369,6 @@ export function previousObservation(
   // A recent decrease must not be hidden by selecting an older, smaller count.
   if (observations[0]?.views_t1 > post.views_t1) return observations[0];
   return observations.find((candidate) => Date.parse(post.collected_at) - Date.parse(candidate.collected_at) >= 3600000) || observations[0];
-}
-
-export function saveScan(scan: Scan) {
-  return serialized(async () => {
-    try {
-      const current = await indexedCandidates();
-      await fs.mkdir(writableDirectory, { recursive: true });
-      const scanName = `scan_${Date.now()}_${randomUUID()}.json`;
-      const filename = path.join(writableDirectory, scanName);
-      const json = JSON.stringify(scan);
-      await fs.writeFile(`${filename}.tmp`, json);
-      await fs.rename(`${filename}.tmp`, filename);
-      await syncBlob(`scans/${scanName}`, json);
-      await writeIndex(mergeScans([scan, { timestamp: "1970-01-01", candidates: current }]));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EROFS") {
-        return;
-      }
-      throw error;
-    }
-  });
 }
 
 export function compareObservation(

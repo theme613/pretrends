@@ -40,6 +40,24 @@ import {
 import { PredictionViews } from "./prediction-views";
 import { sameBatchFilters, type RefreshBatch } from "@/lib/refresh-batch";
 import "./trend-explorer.css";
+
+class IdeaUpdateError extends Error {
+  // A conflict means another scan owns the collection; nothing needs recovering.
+  constructor(message: string, readonly conflict = false) { super(message); }
+}
+const updateFailed = "Could not update ideas. Your saved ideas are still here. Please try again.";
+const updateTimedOut = "This search took too long. Your saved ideas are still here. Please try again.";
+async function readScanResponse(response: Response) {
+  const result = await response.json().catch(() => null);
+  if (response.status === 504) throw new IdeaUpdateError(updateTimedOut);
+  if (result?.code === "MISSING_CONFIGURATION") {
+    throw new IdeaUpdateError("Fresh ideas are not set up on this website yet. Your saved ideas are still available.");
+  }
+  if (response.status === 409 && typeof result?.error === "string") throw new IdeaUpdateError(result.error, true);
+  if (!response.ok || !result || result.status === "failed") throw new IdeaUpdateError(updateFailed);
+  return result;
+}
+
 function FilterMenu({
   label,
   value,
@@ -257,18 +275,10 @@ export default function TrendExplorer({
   const [scanning, setScanning] = useState(false);
   const pollController = useRef<AbortController | null>(null);
   useEffect(() => () => pollController.current?.abort(), []);
-  function applyCollection(data: unknown) {
-    const incoming = normalizeTrends(data);
-    setTrends((current) => {
-      const map = new Map<string, Trend>();
-      for (const post of current) {
-        map.set(post.id, post);
-      }
-      for (const post of incoming) {
-        map.set(post.id, post);
-      }
-      return [...map.values()];
-    });
+  function applyCollection(data: unknown, keepCurrent = false) {
+    // Successful responses contain the full saved collection, including removals.
+    const incoming = [...new Map(normalizeTrends(data).map((post) => [post.id, post])).values()];
+    setTrends((current) => keepCurrent ? [...new Map([...current, ...incoming].map((post) => [post.id, post])).values()] : incoming);
     setSelected((current) => current ? incoming.find((post) => post.id === current.id) || current : null);
   }
   async function runLiveScan() {
@@ -291,31 +301,29 @@ export default function TrendExplorer({
       if (controller.signal.aborted) abort();
     });
     const started = Date.now();
-    const requestSignal = () => AbortSignal.any([controller.signal, AbortSignal.timeout(120000)]);
+    const requestSignal = (timeout = 20000) => AbortSignal.any([controller.signal, AbortSignal.timeout(timeout)]);
     try {
       const response = await fetch("/api/scan", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ categories: selectedCategories, platform, mode: "refresh" }),
-        cache: "no-store", signal: requestSignal(),
+        cache: "no-store", signal: requestSignal(310000),
       });
-      let result = await response.json();
-      if (response.status === 409) { setMessage(result.error); return; }
-      if (!response.ok) throw new Error(result.error || "Scan failed. Please try again.");
+      let result = await readScanResponse(response);
       if (response.status === 202) {
         const id = result.id;
         let revision = -1;
         while (true) {
-          if (Date.now() - started > 15 * 60000) throw new Error("Scan timed out.");
+          if (Date.now() - started > 15 * 60000) throw new IdeaUpdateError(updateTimedOut);
           const progressResponse = await fetch(`/api/scan?id=${encodeURIComponent(id)}&since=${revision}`, { cache: "no-store", signal: requestSignal() });
-          const progress = await progressResponse.json();
+          const progress = await readScanResponse(progressResponse);
           if (progress.data) applyCollection(progress.data.candidates);
           revision = progress.revision ?? revision;
-          if (!progressResponse.ok || progress.status === "failed") throw new Error(progress.error || "Scan failed. Please try again.");
           if (progress.status === "complete") { result = progress.result; break; }
           setMessage(Date.now() - started >= 40000 ? delayed : "Finding fresh ideas…");
           await waitForPoll();
         }
       }
+      if (!Array.isArray(result?.data?.candidates)) throw new IdeaUpdateError(updateFailed);
       applyCollection(result.data.candidates);
       const filters = activeFilters.current;
       const hasMatches = normalizeTrends(result.data.candidates).some((post) =>
@@ -325,20 +333,27 @@ export default function TrendExplorer({
       );
       if (result.batch && sameBatchFilters(requestedFilters, filters)) {
         setRefreshBatch(result.batch);
-        setVisibleCount(12);
+        setVisibleCount((count) => Math.max(count, 12));
         const batch: RefreshBatch = result.batch;
         setMessage(`${batch.ids.length} ideas ready · ${batch.fresh_count} fresh, ${batch.reused_count} saved.${batch.ids.length < 12 ? " Fewer than 12 verified matches are available." : ""}`);
       } else {
         setMessage(hasMatches ? "Ideas updated. Your current filters are applied." : "No matching ideas found. Try another topic.");
       }
-    } catch {
+    } catch (error) {
       if (controller.signal.aborted) return;
+      if (error instanceof IdeaUpdateError && error.conflict) {
+        setMessage(error.message);
+        return;
+      }
       try {
         const latest = await fetch("/api/trends", { cache: "no-store", signal: requestSignal() });
-        if (latest.ok) applyCollection(await latest.json());
+        if (latest.ok) {
+          const collection = await latest.json();
+          if (Array.isArray(collection)) applyCollection(collection, true);
+        }
 
       } catch { /* Keep the current verified ideas available if the read fails. */ }
-      if (!controller.signal.aborted) setMessage("Could not update ideas. Please try again.");
+      if (!controller.signal.aborted) setMessage(error instanceof IdeaUpdateError ? error.message : error instanceof Error && error.name === "TimeoutError" ? updateTimedOut : updateFailed);
     } finally {
       clearTimeout(slowTimer);
       if (pollController.current === controller) pollController.current = null;

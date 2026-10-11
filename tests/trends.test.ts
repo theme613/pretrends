@@ -342,7 +342,7 @@ test("content cache excludes view-count changes, but invalidates changed content
   assert.equal(result[0].ai_usage, undefined);
 });
 
-test("direct source recheck keeps missing, blocked and deleted results hidden", async () => {
+test("source rechecks hide deleted posts without treating blocked or missing searches as deletion", async () => {
   const { scrape } = await import("../src/lib/apify");
   const originalFetch = globalThis.fetch;
   const token = process.env.APIFY_API_TOKEN;
@@ -371,10 +371,11 @@ test("direct source recheck keeps missing, blocked and deleted results hidden", 
       };
       const result = await scrape("TikTok", [], 1, [known]);
       assert.equal(result.posts.length, 0);
-      assert.equal(
-        result.verifications[0].status,
-        row?.error === "not-found" ? "unavailable" : "unverified",
-      );
+      if (row?.error === "not-found") {
+        assert.equal(result.verifications[0].status, "unavailable");
+      } else {
+        assert.deepEqual(result.verifications, []);
+      }
     }
   } finally {
     globalThis.fetch = originalFetch;

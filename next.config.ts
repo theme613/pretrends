@@ -3,7 +3,7 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   serverExternalPackages: ["ffmpeg-static"],
   outputFileTracingIncludes: {
-    "/**": ["./data/**/*", "./node_modules/ffmpeg-static/**/*"],
+    "/**": ["./data/scans/collection-index.json", "./node_modules/ffmpeg-static/**/*"],
   },
   cacheComponents: true,
   partialPrefetching: true,

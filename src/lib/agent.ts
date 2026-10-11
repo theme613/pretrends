@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { setTimeout as pause } from "node:timers/promises";
 import { calculateForecast, type Forecast } from "./forecast";
 import {
   CONTENT_CHECK_VERSION,
@@ -206,7 +207,7 @@ export async function analyzeFrames(
         }),
       });
     } catch {
-      if (!attempt && !signal.aborted) { await new Promise((resolve) => setTimeout(resolve, 1000)); continue; }
+      if (!attempt && !signal.aborted) { await pause(1000, undefined, { signal }); continue; }
       throw new Error("Grafilab did not respond to the visual check.");
     }
     const body = await response.json().catch(() => ({}));
@@ -220,7 +221,7 @@ export async function analyzeFrames(
       throw new Error(session.stopped);
     }
     if ((response.status === 429 || response.status >= 500) && !attempt) {
-      await new Promise((resolve) => setTimeout(resolve, 1000)); continue;
+      await pause(1000, undefined, { signal }); continue;
     }
     if (!response.ok) throw new Error(`Grafilab visual check returned HTTP ${response.status}.`);
     if (body.choices?.[0]?.finish_reason === "length") throw new Error("AI visual guidance exceeded its token limit.");
@@ -264,31 +265,34 @@ export async function processCandidates(
   async function work(post: ScrapedData): Promise<TrendCandidate> {
     return session.run(async () => {
       if (session.stopped) return fallback(post, session.stopped);
-      if (Date.now() >= deadline || session.newChecks >= session.maxNewChecks)
+      if (deadline - Date.now() < 60000)
+        return fallback(post, "Not enough time remains for another visual check. Try updating again.");
+      if (session.newChecks >= session.maxNewChecks)
         return fallback(post, "New video check budget reached. Prepare the collection to check more.");
       session.newChecks++;
       const timings = { download_ms: 0, frame_ms: 0, ai_ms: 0 };
       try {
-        const signal = AbortSignal.timeout(Math.min(25000, Math.max(1, deadline - Date.now())));
+        const signal = AbortSignal.timeout(Math.min(60000, Math.max(1, deadline - Date.now())));
+        const mediaSignal = AbortSignal.any([signal, AbortSignal.timeout(25000)]);
         let frames: string[] | undefined;
         if (post.video_url) {
           try {
-            frames = await (options.extract || extractFrames)(post.video_url, signal, timings);
+            frames = await (options.extract || extractFrames)(post.video_url, mediaSignal, timings);
           } catch {
             /* video extraction failed or timed out, try image fallback */
           }
         }
         if (!frames && post.image) {
           try {
-            const frame = await thumbnail(post.image, signal);
+            const frame = await thumbnail(post.image, AbortSignal.any([signal, AbortSignal.timeout(8000)]));
             if (frame) frames = [frame, frame, frame];
           } catch {}
         }
         if (!frames) throw new Error("The scraper did not provide playable video or image media.");
-        const preview_key = await savePreview(previewKey(post), frames[0]).catch(() => undefined);
         const started = Date.now();
         const analysis = await (options.analyze || analyzeFrames)(post, frames, signal, session);
         timings.ai_ms = Date.now() - started;
+        const preview_key = await savePreview(previewKey(post), frames[0], signal).catch(() => undefined);
         session.compatible = true;
         return { ...fallback(post), ...analysis, preview_key, timings, ai_status: "complete",
           content_status: analysis.categories.length ? "verified" : "uncertain",
@@ -297,7 +301,7 @@ export async function processCandidates(
           check_error: analysis.categories.length ? undefined : "No activity could be confidently confirmed." };
       } catch (error) {
         const message = error instanceof Error ? error.message : "Visual check failed.";
-        if (!session.compatible && (message.startsWith("AI ") || message.startsWith("Grafilab")))
+        if (!session.compatible && message.startsWith("AI "))
           session.stopped = `Visual API compatibility check failed: ${message}`;
         return { ...fallback(post, message), timings,
           content_fingerprint: contentFingerprint(post), content_check_version: CONTENT_CHECK_VERSION,
