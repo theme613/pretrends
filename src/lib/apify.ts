@@ -139,14 +139,14 @@ export async function scrape(
             : 1,
         }
       : {
-          startUrls: [
-            ...knownPosts.map((post) => post.url),
-            ...hashtags.map(
-              (hashtag) => `https://www.tiktok.com/tag/${hashtag}`,
-            ),
-          ],
-          keywords: hashtags.length ? hashtags : ["food"],
+          startUrls: knownPosts.length
+            ? knownPosts.map((post) => post.url)
+            : hashtags.length
+              ? hashtags.map((h) => `https://www.tiktok.com/tag/${encodeURIComponent(h)}`)
+              : ["https://www.tiktok.com/tag/fyp"],
+          keywords: hashtags.length ? hashtags.slice(0, 2) : ["fyp", "viral"],
           maxItems: Math.min(20, limit),
+          sortType: "RELEVANCE",
         };
   const headers = {
     Authorization: `Bearer ${process.env.APIFY_API_TOKEN}`,

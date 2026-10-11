@@ -103,8 +103,7 @@ export async function runScan(job: ScanJob, overrides: Partial<Dependencies> = {
           : fallback(post, "Waiting for a visual check.");
       }), result.verifications);
       job.stage = "Checking video content";
-      const toProcess = job.mode === "refresh" ? observations.slice(0, 6) : observations;
-      await io.process(toProcess, undefined, checks, processDeadline, {
+      await io.process(observations, undefined, checks, processDeadline, {
         session,
         onResult: async (post) => {
           await publish([post]);

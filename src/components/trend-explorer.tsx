@@ -210,7 +210,7 @@ export default function TrendExplorer({
   const batchPosts = filtered.filter((post) => batchIds.has(post.id));
   const remainingPosts = filtered.filter((post) => !batchIds.has(post.id));
   const visible = refreshBatch
-    ? [...batchPosts, ...remainingPosts.slice(0, Math.max(0, visibleCount - 12))]
+    ? [...batchPosts, ...remainingPosts].slice(0, visibleCount)
     : filtered.slice(0, visibleCount);
   const selectedAvailable = selected !== null && trends.some((post) => post.id === selected.id);
   function toggleSave(trend: Trend) {
@@ -258,9 +258,18 @@ export default function TrendExplorer({
   const pollController = useRef<AbortController | null>(null);
   useEffect(() => () => pollController.current?.abort(), []);
   function applyCollection(data: unknown) {
-    const next = [...new Map(normalizeTrends(data).map((post) => [post.id, post])).values()];
-    setTrends(next);
-    setSelected((current) => current ? next.find((post) => post.id === current.id) || current : null);
+    const incoming = normalizeTrends(data);
+    setTrends((current) => {
+      const map = new Map<string, Trend>();
+      for (const post of current) {
+        map.set(post.id, post);
+      }
+      for (const post of incoming) {
+        map.set(post.id, post);
+      }
+      return [...map.values()];
+    });
+    setSelected((current) => current ? incoming.find((post) => post.id === current.id) || current : null);
   }
   async function runLiveScan() {
     if (pollController.current) return;

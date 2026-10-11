@@ -83,7 +83,21 @@ export function mergeScans(scans: Scan[]): TrendCandidate[] {
       )
         continue;
       const key = `${post.platform}:${post.id}`;
-      if (!posts.has(key)) posts.set(key, post);
+      const existing = posts.get(key);
+      if (!existing) {
+        posts.set(key, post);
+      } else if (existing.content_status !== "verified" && post.content_status === "verified") {
+        posts.set(key, post);
+      } else if (existing.content_status === "verified" && post.content_status !== "verified") {
+        posts.set(key, {
+          ...existing,
+          views_t1: post.views_t1 ?? existing.views_t1,
+          collected_at: post.collected_at || existing.collected_at,
+          source_status: post.source_status || existing.source_status,
+          source_verified_at: post.source_verified_at || existing.source_verified_at,
+          source_run_id: post.source_run_id || existing.source_run_id,
+        });
+      }
 
       if (!postObservations.has(key)) {
         postObservations.set(key, new Map());
@@ -267,6 +281,21 @@ async function indexedCandidates(): Promise<TrendCandidate[]> {
             index.candidates.every((post: TrendCandidate) => post && typeof post.id === "string" && typeof post.platform === "string")) {
           await fs.mkdir(writableDirectory, { recursive: true }).catch(() => {});
           await fs.writeFile(writableIndexFile, blobText).catch(() => {});
+          let diskCandidates: TrendCandidate[] = [];
+          try {
+            const diskIndex = JSON.parse(await fs.readFile(indexFile, "utf8"));
+            if (diskIndex.version === 1 && Array.isArray(diskIndex.candidates)) {
+              diskCandidates = diskIndex.candidates;
+            }
+          } catch {
+            /* ignore */
+          }
+          if (diskCandidates.length > 0) {
+            return mergeScans([
+              { timestamp: new Date().toISOString(), candidates: index.candidates },
+              { timestamp: "1970-01-01", candidates: diskCandidates },
+            ]);
+          }
           return index.candidates;
         }
       }
