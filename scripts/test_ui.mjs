@@ -1,9 +1,9 @@
-import { chromium } from "playwright";
+import { launchBrowser } from "./browser.mjs";
 import assert from "node:assert/strict";
 
 // Run against npm run dev or npm start. All scan, recovery, and preview requests
 // are mocked; these checks do not require saved posts or perform paid work.
-const browser = await chromium.launch({ headless: true, ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}) });
+const browser = await launchBrowser();
 const origin = process.env.TEST_URL || "http://localhost:3000";
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64");
 const scanUrl = "**/api/scan**";
@@ -39,6 +39,7 @@ async function seed(page) {
   await page.goto(origin);
   await refresh(page);
   await waitForCount(page, 12);
+  await page.locator(".trend-card").first().scrollIntoViewIfNeeded();
   await page.unroute(scanUrl, bootstrap);
 }
 async function newPage(viewport) {
@@ -107,6 +108,27 @@ try {
     await page.close();
     console.log(`PASS popup, save, keyboard, authoritative scan updates and layout ${viewport.width}px`);
   }
+  const workspacePage = await newPage({ width: 1440, height: 1000 });
+  await seed(workspacePage);
+  const firstIdea = workspacePage.locator(".trend-card").first();
+  await firstIdea.locator(".bookmark-button").click();
+  await firstIdea.locator(".card-action").click();
+  await workspacePage.getByRole("dialog").locator(".detail-caption summary").click();
+  await workspacePage.getByRole("dialog").locator("textarea").fill("A saved hook, written my way.");
+  await workspacePage.keyboard.press("Escape");
+  await workspacePage.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: /Saved ideas/ }).click();
+  await workspacePage.reload();
+  await workspacePage.locator(".saved-card").waitFor();
+  assert.equal(await workspacePage.locator(".saved-card").count(), 1);
+  await workspacePage.getByRole("button", { name: "Create a post", exact: true }).click();
+  assert.equal(await workspacePage.getByRole("dialog").getByLabel("Caption & opening hook").inputValue(), "A saved hook, written my way.");
+  await workspacePage.getByRole("button", { name: "Save post", exact: true }).click();
+  await workspacePage.locator(".column-draft .plan-card").waitFor();
+  await workspacePage.reload();
+  await workspacePage.locator(".column-draft .plan-card").waitFor();
+  await workspacePage.close();
+  console.log("PASS saved idea and edited brief survive reload and become a persistent planner post");
+
   for (const width of [1440, 390]) {
     const page = await newPage({ width, height: 900 });
     await seed(page);

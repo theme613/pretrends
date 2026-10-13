@@ -15,21 +15,24 @@ export default function Error({
   }, [error]);
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-black text-white p-6 font-sans">
-      <div className="max-w-md w-full bg-zinc-950 border border-zinc-800 rounded-2xl p-8 text-center shadow-2xl">
-        <div className="w-12 h-12 rounded-full bg-amber-500/10 text-amber-500 flex items-center justify-center mx-auto mb-4 border border-amber-500/20">
+    <main className="min-h-screen flex items-center justify-center bg-[#fbfaf8] text-[#302a37] p-6 font-sans">
+      <div className="max-w-md w-full bg-[#fffefd] border border-[#e8e1ee] rounded-2xl p-8 text-center">
+        <div className="w-12 h-12 rounded-full bg-[#f0e8f5] text-[#887198] flex items-center justify-center mx-auto mb-4">
           <AlertCircle className="w-6 h-6" />
         </div>
-        <h2 className="text-xl font-semibold mb-2">Something went wrong</h2>
-        <p className="text-sm text-zinc-400 mb-6">
-          An error occurred while loading this page. You can reload to retry.
+        <h2 className="text-xl font-medium mb-2">
+          Let’s give that another try.
+        </h2>
+        <p className="text-sm text-[#87778f] leading-relaxed mb-6">
+          Your workspace couldn’t load this time. Try again to get back to your
+          ideas.
         </p>
         <button
           onClick={() => reset()}
-          className="inline-flex items-center justify-center gap-2 w-full py-2.5 px-4 rounded-xl bg-white text-black font-medium hover:bg-zinc-200 transition-colors cursor-pointer"
+          className="inline-flex items-center justify-center gap-2 w-full py-2.5 px-4 rounded-lg bg-[#77628e] text-white font-medium hover:bg-[#665079] transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#77628e]"
         >
           <RotateCcw className="w-4 h-4" />
-          Reload
+          Try again
         </button>
       </div>
     </main>

@@ -18,7 +18,24 @@ async function CurrentTrends() {
 
 export default function Home() {
   return (
-    <Suspense fallback={<p style={{ padding: 32 }}>Loading your ideas…</p>}>
+    <Suspense
+      fallback={
+        <main
+          className="app-loading"
+          aria-busy="true"
+          aria-label="Loading your workspace"
+        >
+          <span className="loading-brand">pretrends.</span>
+          <div className="loading-banner" />
+          <p role="status">Gathering your next good ideas…</p>
+          <div className="loading-cards">
+            <span />
+            <span />
+            <span />
+          </div>
+        </main>
+      }
+    >
       <CurrentTrends />
     </Suspense>
   );

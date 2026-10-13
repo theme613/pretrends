@@ -1,21 +1,26 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { SOURCE_MAX_AGE_MS } from "@/lib/post-policy";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   ArrowRight,
   ArrowUpRight,
   Bookmark,
+  CalendarDays,
   Check,
   ChevronDown,
   CircleHelp,
   Copy,
   ExternalLink,
   Flame,
+  LayoutGrid,
+  Plus,
   Radar,
   RefreshCw,
   Search,
+  Settings2,
+  ShieldCheck,
   Sparkles,
   TrendingUp,
   X,
@@ -39,23 +44,52 @@ import {
 } from "@/lib/trends";
 import { PredictionViews } from "./prediction-views";
 import { sameBatchFilters, type RefreshBatch } from "@/lib/refresh-batch";
+import { useWorkspace } from "@/hooks/use-workspace";
+import {
+  useWorkspaceView,
+  navigateWorkspace,
+} from "@/hooks/use-workspace-view";
+import {
+  starterTemplates,
+  type ContentDraft,
+  type SavedIdea,
+} from "@/lib/workspace";
+import {
+  ContentPlanner,
+  DraftEditor,
+  SavedIdeas,
+  StarterLibrary,
+  WorkspaceSettings,
+  navigation,
+  viewLabels,
+  type WorkspaceView,
+  type ConnectionStatus,
+} from "./workspace-panels";
 import "./trend-explorer.css";
+import "./workspace.css";
+import { refreshIdeas } from "@/lib/scan-client";
 
-class IdeaUpdateError extends Error {
-  // A conflict means another scan owns the collection; nothing needs recovering.
-  constructor(message: string, readonly conflict = false) { super(message); }
-}
-const updateFailed = "Could not update ideas. Your saved ideas are still here. Please try again.";
-const updateTimedOut = "This search took too long. Your saved ideas are still here. Please try again.";
-async function readScanResponse(response: Response) {
-  const result = await response.json().catch(() => null);
-  if (response.status === 504) throw new IdeaUpdateError(updateTimedOut);
-  if (result?.code === "MISSING_CONFIGURATION") {
-    throw new IdeaUpdateError("Fresh ideas are not set up on this website yet. Your saved ideas are still available.");
+async function loadConnections(
+  signal?: AbortSignal,
+): Promise<ConnectionStatus> {
+  const response = await fetch("/api/health", {
+    cache: "no-store",
+    signal: AbortSignal.any([
+      ...(signal ? [signal] : []),
+      AbortSignal.timeout(10000),
+    ]),
+  });
+  if (!response.ok) throw new Error("Status unavailable");
+  const services = (await response.json()).services;
+  if (
+    !services ||
+    !["discovery", "analysis", "storage", "cloud", "ready"].every(
+      (key) => typeof services[key] === "boolean",
+    )
+  ) {
+    throw new Error("Status unavailable");
   }
-  if (response.status === 409 && typeof result?.error === "string") throw new IdeaUpdateError(result.error, true);
-  if (!response.ok || !result || result.status === "failed") throw new IdeaUpdateError(updateFailed);
-  return result;
+  return services;
 }
 
 function FilterMenu({
@@ -108,12 +142,25 @@ let previewRequests = 0;
 const previewWaiters: (() => void)[] = [];
 const previewBlobs = new Map<string, Blob>();
 async function previewSlot(eager: boolean) {
-  if (previewRequests >= 3) await new Promise<void>((resolve) => eager ? previewWaiters.unshift(resolve) : previewWaiters.push(resolve));
+  if (previewRequests >= 3)
+    await new Promise<void>((resolve) =>
+      eager ? previewWaiters.unshift(resolve) : previewWaiters.push(resolve),
+    );
   else previewRequests++;
-  return () => { const next = previewWaiters.shift(); if (next) next(); else previewRequests--; };
+  return () => {
+    const next = previewWaiters.shift();
+    if (next) next();
+    else previewRequests--;
+  };
 }
-function TrendArtwork({ trend, eager = false, onOpen }: {
-  trend: Trend; eager?: boolean; onOpen?: (button: HTMLButtonElement) => void;
+function TrendArtwork({
+  trend,
+  eager = false,
+  onOpen,
+}: {
+  trend: Trend;
+  eager?: boolean;
+  onOpen?: (button: HTMLButtonElement) => void;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const [attempt, setAttempt] = useState(0);
@@ -122,46 +169,109 @@ function TrendArtwork({ trend, eager = false, onOpen }: {
   const source = trend.previewUrl || trend.image;
   useEffect(() => {
     const controller = new AbortController();
-    let objectUrl = "", started = false;
+    let objectUrl = "",
+      started = false;
     async function load() {
       if (started) return;
       started = true;
-      setImage(""); setFailed(false);
-      if (!source) { setFailed(true); return; }
+      setImage("");
+      setFailed(false);
+      if (!source) {
+        setFailed(true);
+        return;
+      }
       const cached = previewBlobs.get(source);
-      if (cached) { objectUrl = URL.createObjectURL(cached); setImage(objectUrl); return; }
+      if (cached) {
+        objectUrl = URL.createObjectURL(cached);
+        setImage(objectUrl);
+        return;
+      }
       const release = await previewSlot(eager);
       try {
         if (controller.signal.aborted) return;
-        const response = await fetch(source, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(60000)]) });
+        const response = await fetch(source, {
+          signal: AbortSignal.any([
+            controller.signal,
+            AbortSignal.timeout(60000),
+          ]),
+        });
         if (!response.ok) throw new Error("Preview unavailable");
         const blob = await response.blob();
         if (!blob.type.startsWith("image/")) throw new Error("Invalid preview");
         if (!controller.signal.aborted) {
-          if (previewBlobs.size >= 100) previewBlobs.delete(previewBlobs.keys().next().value!);
+          if (previewBlobs.size >= 100)
+            previewBlobs.delete(previewBlobs.keys().next().value!);
           previewBlobs.set(source, blob);
-          objectUrl = URL.createObjectURL(blob); setImage(objectUrl);
+          objectUrl = URL.createObjectURL(blob);
+          setImage(objectUrl);
         }
-      } catch { if (!controller.signal.aborted) setFailed(true); }
-      finally { release(); }
+      } catch {
+        if (!controller.signal.aborted) setFailed(true);
+      } finally {
+        release();
+      }
     }
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) { observer.disconnect(); void load(); }
-    }, { rootMargin: "200px" });
-    if (eager) void load(); else if (container.current) observer.observe(container.current);
-    return () => { controller.abort(); observer.disconnect(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          observer.disconnect();
+          void load();
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    if (eager) void load();
+    else if (container.current) observer.observe(container.current);
+    return () => {
+      controller.abort();
+      observer.disconnect();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
   }, [source, attempt, eager]);
-  const artwork = image && !failed ? (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img src={image} alt={trend.title} onError={() => { if (source) previewBlobs.delete(source); setFailed(true); }} />
-  ) : <span className="preview-loading">{failed ? "Preview could not load" : "Loading preview…"}</span>;
-  return <div ref={container} className="trend-art" aria-busy={!image && !failed}>
-    {onOpen ? <button className="preview-open" aria-label={`Open details for ${trend.title}`} aria-haspopup="dialog" onClick={(event) => onOpen(event.currentTarget)}>{artwork}</button> : artwork}
-    {failed && <div className="preview-recovery">
-      <button onClick={() => setAttempt((value) => value + 1)}>Retry preview</button>
-      {trend.url && <a href={trend.url} target="_blank" rel="noreferrer">Watch original</a>}
-    </div>}
-  </div>;
+  const artwork =
+    image && !failed ? (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={image}
+        alt={trend.title}
+        onError={() => {
+          if (source) previewBlobs.delete(source);
+          setFailed(true);
+        }}
+      />
+    ) : (
+      <span className="preview-loading">
+        {failed ? "Preview could not load" : "Loading preview…"}
+      </span>
+    );
+  return (
+    <div ref={container} className="trend-art" aria-busy={!image && !failed}>
+      {onOpen ? (
+        <button
+          className="preview-open"
+          aria-label={`Open details for ${trend.title}`}
+          aria-haspopup="dialog"
+          onClick={(event) => onOpen(event.currentTarget)}
+        >
+          {artwork}
+        </button>
+      ) : (
+        artwork
+      )}
+      {failed && (
+        <div className="preview-recovery">
+          <button onClick={() => setAttempt((value) => value + 1)}>
+            Retry preview
+          </button>
+          {trend.url && (
+            <a href={trend.url} target="_blank" rel="noreferrer">
+              Watch original
+            </a>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 export default function TrendExplorer({
   initialTrends,
@@ -173,7 +283,103 @@ export default function TrendExplorer({
   const [query, setQuery] = useState("");
   const [platform, setPlatform] = useState("all");
   const [sort, setSort] = useState("score");
-  const [saved, setSaved] = useState<string[]>([]);
+  const workspace = useWorkspace();
+  const saved = workspace.data.bookmarks.map((idea) => idea.id);
+  const business = workspace.data.business;
+  const view = useWorkspaceView();
+  const [workspaceQuery, setWorkspaceQuery] = useState("");
+  const [editing, setEditing] = useState<ContentDraft | null>(null);
+  const [connections, setConnections] = useState<ConnectionStatus | null>(null);
+  const [connectionMessage, setConnectionMessage] = useState("");
+  async function checkConnections(signal?: AbortSignal) {
+    try {
+      setConnections(await loadConnections(signal));
+      setConnectionMessage("");
+    } catch {
+      if (!signal?.aborted)
+        setConnectionMessage(
+          "Connection status is unavailable. You can keep using your workspace.",
+        );
+    }
+  }
+  useEffect(() => {
+    const controller = new AbortController();
+    loadConnections(controller.signal)
+      .then((data) => {
+        if (!controller.signal.aborted) setConnections(data);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted)
+          setConnectionMessage(
+            "Connection status is unavailable. You can keep using your workspace.",
+          );
+      });
+    return () => controller.abort();
+  }, []);
+  function navigate(next: WorkspaceView) {
+    setWorkspaceQuery("");
+    navigateWorkspace(next);
+  }
+  function setBusiness(value: string) {
+    workspace.update((current) => ({ ...current, business: value }));
+  }
+  function newDraft(values: Partial<ContentDraft> = {}) {
+    setEditing({
+      id: crypto.randomUUID(),
+      caption: "",
+      notes: "",
+      platform: "TikTok",
+      status: "draft",
+      scheduledFor: "",
+      sourceUrl: "",
+      sourceId: "",
+      updatedAt: new Date().toISOString(),
+      ...values,
+      title: values.title?.slice(0, 160) || "",
+    });
+  }
+  function createFromTemplate(template: (typeof starterTemplates)[number]) {
+    newDraft({
+      title: template.title,
+      caption: template.caption,
+      notes: template.notes,
+    });
+  }
+  function saveDraft(draft: ContentDraft) {
+    try {
+      workspace.update((current) => ({
+        ...current,
+        drafts: [
+          ...current.drafts.filter((item) => item.id !== draft.id),
+          draft,
+        ],
+      }));
+      setEditing(null);
+      navigate("planner");
+      setMessage(`Saved “${draft.title}” to your content plan.`);
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Could not save this post.",
+      );
+    }
+  }
+  function createFromSaved(idea: SavedIdea) {
+    const trend = trends.find((trend) => trend.id === idea.id);
+    const brief = workspace.data.briefs.find((brief) => brief.id === idea.id);
+    newDraft({
+      title: idea.title,
+      sourceId: idea.id,
+      sourceUrl: idea.url,
+      platform: idea.platform,
+      caption:
+        brief?.caption ?? (trend ? starterIdea(trend, business).hook : ""),
+      notes: trend
+        ? starterIdea(trend, business)
+            .steps.map((step, i) => `${i + 1}. ${step}`)
+            .join("\n")
+        : "",
+    });
+  }
   const [selected, setSelected] = useState<Trend | null>(null);
   const detailTrigger = useRef<HTMLButtonElement | null>(null);
   // Expiry is local: no paid request is triggered by opening or leaving the page open.
@@ -193,20 +399,22 @@ export default function TrendExplorer({
               Date.now(),
           ),
         );
-
       },
       Math.max(0, expiresAt - Date.now() + 1),
     );
     return () => clearTimeout(timeout);
   }, [trends]);
   const [howOpen, setHowOpen] = useState(false);
-  const [business, setBusiness] = useState("");
   const [caption, setCaption] = useState("");
   const [copied, setCopied] = useState(false);
   const [visibleCount, setVisibleCount] = useState(12);
   const [refreshBatch, setRefreshBatch] = useState<RefreshBatch | null>(null);
   const [message, setMessage] = useState("");
-  const activeFilters = useRef({ categories: selectedCategories, platform, query });
+  const activeFilters = useRef({
+    categories: selectedCategories,
+    platform,
+    query,
+  });
   useEffect(() => {
     activeFilters.current = { categories: selectedCategories, platform, query };
   }, [selectedCategories, platform, query]);
@@ -220,6 +428,9 @@ export default function TrendExplorer({
           .includes(query.toLowerCase().trim()),
     )
     .sort((a, b) => {
+      if (sort === "views") return b.currentViews - a.currentViews;
+      if (sort === "recent")
+        return Date.parse(b.sourceVerifiedAt) - Date.parse(a.sourceVerifiedAt);
       if (sort === "growth")
         return (growth(b) ?? -Infinity) - (growth(a) ?? -Infinity);
       return b.score - a.score;
@@ -230,25 +441,52 @@ export default function TrendExplorer({
   const visible = refreshBatch
     ? [...batchPosts, ...remainingPosts].slice(0, visibleCount)
     : filtered.slice(0, visibleCount);
-  const selectedAvailable = selected !== null && trends.some((post) => post.id === selected.id);
+  const selectedAvailable =
+    selected !== null && trends.some((post) => post.id === selected.id);
   function toggleSave(trend: Trend) {
     const wasSaved = saved.includes(trend.id);
-    setSaved((previous) =>
-      wasSaved
-        ? previous.filter((id) => id !== trend.id)
-        : [...previous, trend.id],
-    );
+    workspace.update((current) => ({
+      ...current,
+      bookmarks: wasSaved
+        ? current.bookmarks.filter((idea) => idea.id !== trend.id)
+        : [
+            ...current.bookmarks,
+            {
+              id: trend.id,
+              title: trend.title,
+              creator: trend.creator,
+              platform: trend.platform,
+              url: trend.url || "",
+              savedAt: new Date().toISOString(),
+            },
+          ],
+    }));
     setMessage(
       wasSaved
         ? `Removed ${trend.title} from saved ideas.`
-        : `Saved ${trend.title} for this session.`,
+        : `Saved ${trend.title} to your ideas.`,
     );
   }
   function openIdea(trend: Trend, trigger: HTMLButtonElement) {
     detailTrigger.current = trigger;
     setSelected(trend);
-    setCaption(starterIdea(trend, business).hook);
+    setCaption(
+      workspace.data.briefs.find((brief) => brief.id === trend.id)?.caption ??
+        starterIdea(trend, business).hook,
+    );
     setCopied(false);
+  }
+  function editCaption(value: string) {
+    setCaption(value);
+    setCopied(false);
+    if (selected)
+      workspace.update((current) => ({
+        ...current,
+        briefs: [
+          ...current.briefs.filter((brief) => brief.id !== selected.id),
+          { id: selected.id, caption: value },
+        ],
+      }));
   }
   function resetFilters() {
     setRefreshBatch(null);
@@ -275,87 +513,66 @@ export default function TrendExplorer({
   const [scanning, setScanning] = useState(false);
   const pollController = useRef<AbortController | null>(null);
   useEffect(() => () => pollController.current?.abort(), []);
-  function applyCollection(data: unknown, keepCurrent = false) {
+  const applyCollection = useCallback((data: unknown, keepCurrent = false) => {
     // Successful responses contain the full saved collection, including removals.
-    const incoming = [...new Map(normalizeTrends(data).map((post) => [post.id, post])).values()];
-    setTrends((current) => keepCurrent ? [...new Map([...current, ...incoming].map((post) => [post.id, post])).values()] : incoming);
-    setSelected((current) => current ? incoming.find((post) => post.id === current.id) || current : null);
-  }
+    const incoming = [
+      ...new Map(normalizeTrends(data).map((post) => [post.id, post])).values(),
+    ];
+    setTrends((current) =>
+      keepCurrent
+        ? [
+            ...new Map(
+              [...current, ...incoming].map((post) => [post.id, post]),
+            ).values(),
+          ]
+        : incoming,
+    );
+    setSelected((current) =>
+      current
+        ? incoming.find((post) => post.id === current.id) || current
+        : null,
+    );
+  }, []);
   async function runLiveScan() {
     if (pollController.current) return;
     const controller = new AbortController();
     pollController.current = controller;
     const requestedFilters = { categories: [...selectedCategories], platform };
     setScanning(true);
-    setMessage("Finding fresh ideas…");
-    const delayed = "Still finding ideas. You can keep browsing.";
-    const slowTimer = setTimeout(() => setMessage(delayed), 40000);
-    // Visibility changes wake the existing poll; they do not start another scan.
-    const waitForPoll = () => new Promise<void>((resolve, reject) => {
-      const cleanup = () => { clearTimeout(timer); document.removeEventListener("visibilitychange", wake); controller.signal.removeEventListener("abort", abort); };
-      const wake = () => { if (document.visibilityState === "visible") { cleanup(); resolve(); } };
-      const abort = () => { cleanup(); reject(new DOMException("Aborted", "AbortError")); };
-      const timer = setTimeout(() => { cleanup(); resolve(); }, document.visibilityState === "hidden" ? 10000 : 2000);
-      document.addEventListener("visibilitychange", wake);
-      controller.signal.addEventListener("abort", abort, { once: true });
-      if (controller.signal.aborted) abort();
-    });
-    const started = Date.now();
-    const requestSignal = (timeout = 20000) => AbortSignal.any([controller.signal, AbortSignal.timeout(timeout)]);
     try {
-      const response = await fetch("/api/scan", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ categories: selectedCategories, platform, mode: "refresh" }),
-        cache: "no-store", signal: requestSignal(310000),
+      await refreshIdeas({
+        signal: controller.signal,
+        ...requestedFilters,
+        onCollection: applyCollection,
+        onMessage: setMessage,
+        onComplete: (result) => {
+          const filters = activeFilters.current;
+          const hasMatches = normalizeTrends(result.data.candidates).some(
+            (post) =>
+              matchesCategories(post, filters.categories) &&
+              (filters.platform === "all" ||
+                post.platform === filters.platform) &&
+              `${post.title} ${post.reason} ${post.creator}`
+                .toLowerCase()
+                .includes(filters.query.toLowerCase().trim()),
+          );
+          if (result.batch && sameBatchFilters(requestedFilters, filters)) {
+            setRefreshBatch(result.batch);
+            setVisibleCount((count) => Math.max(count, 12));
+            const batch: RefreshBatch = result.batch;
+            setMessage(
+              `${batch.ids.length} ideas ready · ${batch.fresh_count} fresh, ${batch.reused_count} saved.${batch.ids.length < 12 ? " Fewer than 12 verified matches are available." : ""}`,
+            );
+          } else {
+            setMessage(
+              hasMatches
+                ? "Ideas updated. Your current filters are applied."
+                : "No matching ideas found. Try another topic.",
+            );
+          }
+        },
       });
-      let result = await readScanResponse(response);
-      if (response.status === 202) {
-        const id = result.id;
-        let revision = -1;
-        while (true) {
-          if (Date.now() - started > 15 * 60000) throw new IdeaUpdateError(updateTimedOut);
-          const progressResponse = await fetch(`/api/scan?id=${encodeURIComponent(id)}&since=${revision}`, { cache: "no-store", signal: requestSignal() });
-          const progress = await readScanResponse(progressResponse);
-          if (progress.data) applyCollection(progress.data.candidates);
-          revision = progress.revision ?? revision;
-          if (progress.status === "complete") { result = progress.result; break; }
-          setMessage(Date.now() - started >= 40000 ? delayed : "Finding fresh ideas…");
-          await waitForPoll();
-        }
-      }
-      if (!Array.isArray(result?.data?.candidates)) throw new IdeaUpdateError(updateFailed);
-      applyCollection(result.data.candidates);
-      const filters = activeFilters.current;
-      const hasMatches = normalizeTrends(result.data.candidates).some((post) =>
-        matchesCategories(post, filters.categories) &&
-        (filters.platform === "all" || post.platform === filters.platform) &&
-        `${post.title} ${post.reason} ${post.creator}`.toLowerCase().includes(filters.query.toLowerCase().trim()),
-      );
-      if (result.batch && sameBatchFilters(requestedFilters, filters)) {
-        setRefreshBatch(result.batch);
-        setVisibleCount((count) => Math.max(count, 12));
-        const batch: RefreshBatch = result.batch;
-        setMessage(`${batch.ids.length} ideas ready · ${batch.fresh_count} fresh, ${batch.reused_count} saved.${batch.ids.length < 12 ? " Fewer than 12 verified matches are available." : ""}`);
-      } else {
-        setMessage(hasMatches ? "Ideas updated. Your current filters are applied." : "No matching ideas found. Try another topic.");
-      }
-    } catch (error) {
-      if (controller.signal.aborted) return;
-      if (error instanceof IdeaUpdateError && error.conflict) {
-        setMessage(error.message);
-        return;
-      }
-      try {
-        const latest = await fetch("/api/trends", { cache: "no-store", signal: requestSignal() });
-        if (latest.ok) {
-          const collection = await latest.json();
-          if (Array.isArray(collection)) applyCollection(collection, true);
-        }
-
-      } catch { /* Keep the current verified ideas available if the read fails. */ }
-      if (!controller.signal.aborted) setMessage(error instanceof IdeaUpdateError ? error.message : error instanceof Error && error.name === "TimeoutError" ? updateTimedOut : updateFailed);
     } finally {
-      clearTimeout(slowTimer);
       if (pollController.current === controller) pollController.current = null;
       if (!controller.signal.aborted) setScanning(false);
     }
@@ -376,13 +593,24 @@ export default function TrendExplorer({
   }
   return (
     <div className="explorer">
-      <a className="skip-link" href="#ideas">
-        Skip to ideas
+      <a
+        className="skip-link"
+        href="#workspace-title"
+        onClick={(event) => {
+          event.preventDefault();
+          document.getElementById("workspace-title")?.focus();
+          document.getElementById("workspace-title")?.scrollIntoView();
+        }}
+      >
+        Skip to workspace
       </a>
-      <header className="site-header page-width">
+      <aside className="workspace-sidebar">
         <button
           className="brand"
-          onClick={resetFilters}
+          onClick={() => {
+            resetFilters();
+            navigate("discover");
+          }}
           aria-label="Pretrends home"
         >
           <span className="brand-symbol">
@@ -390,124 +618,228 @@ export default function TrendExplorer({
           </span>
           pretrends<span className="brand-period">.</span>
         </button>
-      </header>
-
-      <main className="page-width">
-        <section
-          id="ideas" tabIndex={-1}
-          className="ideas-section"
-          aria-labelledby="ideas-heading"
-        >
-          <div className="section-heading">
+        <span className="sidebar-label">YOUR CREATIVE SPACE</span>
+        <nav aria-label="Workspace">
+          {navigation.map((item) => (
+            <button
+              key={item.id}
+              className={`sidebar-link ${view === item.id ? "active" : ""}`}
+              aria-current={view === item.id ? "page" : undefined}
+              onClick={() => navigate(item.id)}
+            >
+              <item.icon size={19} />
+              <span>{item.label}</span>
+              {item.id === "saved" && (
+                <span className="nav-count">{saved.length}</span>
+              )}
+              {item.id === "planner" && workspace.data.drafts.length > 0 && (
+                <span className="nav-count">
+                  {workspace.data.drafts.length}
+                </span>
+              )}
+            </button>
+          ))}
+        </nav>
+        <div className="sidebar-tip">
+          <span className="tip-star" aria-hidden="true">
+            ✳
+          </span>
+          <h2>
+            Small sparks.
+            <br />
+            Big possibilities.
+          </h2>
+          <p>Your next great post starts with a little curiosity.</p>
+          <button onClick={() => setHowOpen(true)}>
+            Find your starting point <ArrowUpRight size={15} />
+          </button>
+        </div>
+        <div className="sidebar-bottom">
+          <button
+            className={`sidebar-link ${view === "settings" ? "active" : ""}`}
+            aria-current={view === "settings" ? "page" : undefined}
+            onClick={() => navigate("settings")}
+          >
+            <Settings2 size={18} />
+            <span>Workspace settings</span>
+          </button>
+          <button className="sidebar-link" onClick={() => setHowOpen(true)}>
+            <CircleHelp size={18} />
+            <span>A little help</span>
+          </button>
+          <div className="workspace-profile">
+            <span className="profile-avatar">
+              {business.trim().slice(0, 1).toUpperCase() || "Y"}
+            </span>
             <div>
-              <div className="eyebrow section-eyebrow">
-                A FRESH PLACE TO START
+              <strong>{business || "Your workspace"}</strong>
+              <span>Personal · Saved in this browser</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+      <div className="workspace-body">
+        <header className="workspace-topbar">
+          <div>
+            <span className="topbar-workspace">Workspace</span>
+            <span className="breadcrumb-divider">/</span>
+            <span>{viewLabels[view]}</span>
+          </div>
+          <button
+            className="workspace-mode"
+            onClick={() => navigate("settings")}
+          >
+            <span
+              className={`status-dot ${connections?.ready ? "ready" : ""}`}
+            />
+            {connections === null
+              ? "Personal workspace"
+              : connections.ready
+                ? "Discovery configured"
+                : "Planner ready"}
+            <ChevronDown size={13} />
+          </button>
+        </header>
+        <main className="page-width workspace-main">
+          {view === "discover" ? (
+            <section
+              className="discovery-hero"
+              aria-labelledby="workspace-title"
+            >
+              <div className="hero-copy">
+                <span className="eyebrow">
+                  <span className="little-star">✳</span> A LITTLE AHEAD OF THE
+                  CURVE
+                </span>
+                <h1 id="workspace-title" tabIndex={-1}>
+                  Your next good idea
+                  <br />
+                  is <em>closer than you think.</em>
+                </h1>
+                <p>
+                  Find the signal. Add your own twist.
+                  <br />
+                  Turn a little inspiration into your next business post.
+                </p>
+                <button className="hero-link" onClick={() => setHowOpen(true)}>
+                  Let’s find your spark <ArrowUpRight size={16} />
+                </button>
               </div>
-              <h1 id="ideas-heading">Small sparks. Big possibilities.</h1>
-              <p>
-                Pick a trend. See the signal. Give it your own business twist.
-              </p>
-            </div>
-            <div className="collection-actions">
-              <button
-                className="collection-button collection-button-primary"
-                onClick={() => runLiveScan()}
-                disabled={scanning}
-              >
-                <RefreshCw size={14} className={scanning ? "spinning" : ""} />
-                {scanning ? "Finding ideas…" : "Find fresh ideas"}
-              </button>
-            </div>
-          </div>
-          <div className="filter-row">
-            <div className="category-list" aria-label="Filter by topic">
-              {categories.map((cat) => {
-                const isSelected =
-                  cat.id === "all"
-                    ? selectedCategories.length === 0
-                    : selectedCategories.includes(cat.id);
-                return (
-                  <button
-                    key={cat.id}
-                    aria-pressed={isSelected}
-                    disabled={
-                      cat.id !== "all" &&
-                      !isSelected &&
-                      selectedCategories.length >= 4
-                    }
-                    className={`category-button ${isSelected ? "category-active" : ""}`}
-                    onClick={() => toggleCategory(cat.id)}
-                  >
-                    {cat.id === "all" ? (
-                      <Sparkles size={14} />
-                    ) : (
-                      isSelected && <Check size={14} />
-                    )}
-                    {cat.label}
-                  </button>
-                );
-              })}
-            </div>
-            <div className="category-hint">
-              <span>
-                Select up to 4 categories. Videos must match every selected
-                category.
-              </span>
-              <span>{selectedCategories.length}/4 selected</span>
-            </div>
-          </div>
-          <div className="collection-toolbar">
-            <label className="search-field">
-              <Search size={16} />
-              <input
-                aria-label="Search ideas"
-                placeholder="Find something for your business…"
-                value={query}
-                onChange={(event) => {
-                  setQuery(event.target.value);
-                  setVisibleCount(12);
-                }}
-              />
-              {query && (
-                <button aria-label="Clear search" onClick={() => setQuery("")}>
-                  <X size={14} />
+              <div className="hero-visual" aria-hidden="true">
+                <div className="radar-orbit orbit-one" />
+                <div className="radar-orbit orbit-two" />
+                <div className="radar-orbit orbit-three" />
+                <span className="hero-asterisk">✳</span>
+                <span className="orbit-spark spark-a">✦</span>
+                <span className="orbit-spark spark-b">✧</span>
+                <div className="hero-floating floating-signal">
+                  <span>
+                    <TrendingUp size={19} />
+                  </span>
+                  <div>
+                    <strong>See the signal</strong>
+                    <small>Find something worth creating</small>
+                  </div>
+                </div>
+                <div className="hero-floating floating-idea">
+                  <Sparkles size={25} />
+                  <span>
+                    Your point of view.
+                    <br />
+                    <strong>That’s the good part.</strong>
+                  </span>
+                </div>
+              </div>
+            </section>
+          ) : (
+            <div className="workspace-heading">
+              <div>
+                <span className="eyebrow">YOUR CREATIVE SPACE</span>
+                <h1 id="workspace-title" tabIndex={-1}>
+                  {view === "saved"
+                    ? "Good ideas, kept close."
+                    : view === "planner"
+                      ? "From someday to post day."
+                      : "Make yourself at home."}
+                </h1>
+                <p>
+                  {view === "saved"
+                    ? "Your collection of sparks, ready for your own twist."
+                    : view === "planner"
+                      ? "A clear place for every idea, from the first draft to the final post."
+                      : "Your business, your connections, and everything you’ve been creating."}
+                </p>
+              </div>
+              {view === "planner" && (
+                <button className="primary-button" onClick={() => newDraft()}>
+                  <Plus size={16} /> New post
                 </button>
               )}
-            </label>
-            <div className="toolbar-selects">
-              <FilterMenu
-                label="Filter by platform"
-                value={platform}
-                options={[
-                  { value: "all", label: "All platforms" },
-                  ...Array.from(
-                    new Set(trends.map((trend) => trend.platform)),
-                  ).map((name) => ({ value: name, label: name })),
-                ]}
-                onChange={(value) => {
-                  setRefreshBatch(null);
-                  setPlatform(value);
-                  setVisibleCount(12);
-                }}
-              />
-              <FilterMenu
-                label="Sort ideas"
-                value={sort}
-                options={[
-                  { value: "growth", label: "View growth" },
-                  { value: "score", label: "Signal score" },
-                ]}
-                onChange={setSort}
-              />
             </div>
-          </div>
-          <div className="collection-caption">
-            <span>
-              {filtered.length} {filtered.length === 1 ? "idea" : "ideas"} to
-              explore
-            </span>
-            <span>Real posts · AI suggestions</span>
-          </div>
+          )}
+          {view === "discover" && (
+            <div className="workspace-stats">
+              <div>
+                <span className="stat-icon">
+                  <LayoutGrid size={19} />
+                </span>
+                <span>
+                  <small>Verified ideas</small>
+                  <strong>
+                    {trends.length.toLocaleString()}
+                    <em>ready to explore</em>
+                  </strong>
+                </span>
+              </div>
+              <button onClick={() => navigate("saved")}>
+                <span className="stat-icon">
+                  <Bookmark size={19} />
+                </span>
+                <span>
+                  <small>Saved for later</small>
+                  <strong>
+                    {saved.length}
+                    <em>little sparks</em>
+                  </strong>
+                </span>
+                <ArrowUpRight size={15} />
+              </button>
+              <button onClick={() => navigate("planner")}>
+                <span className="stat-icon">
+                  <CalendarDays size={19} />
+                </span>
+                <span>
+                  <small>In your content plan</small>
+                  <strong>
+                    {
+                      workspace.data.drafts.filter(
+                        (draft) => draft.status !== "published",
+                      ).length
+                    }
+                    <em>ideas in motion</em>
+                  </strong>
+                </span>
+                <ArrowUpRight size={15} />
+              </button>
+            </div>
+          )}
+          {workspace.error && (
+            <div className="inline-notice" role="alert">
+              <CircleHelp size={16} />
+              {workspace.error}
+              <button
+                className="text-button"
+                onClick={() => navigate("settings")}
+              >
+                Open backups
+              </button>
+            </div>
+          )}
+          {connectionMessage && (
+            <p className="inline-notice" role="status">
+              {connectionMessage}
+            </p>
+          )}
           {message && (
             <div className="status-message" role="status">
               <CircleHelp size={15} />
@@ -520,147 +852,379 @@ export default function TrendExplorer({
               </button>
             </div>
           )}
-          <div className="trend-grid">
-            {visible.map((trend) => {
-              const savedIdea = saved.includes(trend.id);
-              const percent = growth(trend);
-              return (
-                <article className="trend-card" key={trend.id}>
-                  <div className="card-image">
-                    <TrendArtwork trend={trend} onOpen={(button) => openIdea(trend, button)} />
-                    <span className="platform-tag">
-                      {trend.platform === "TikTok"
-                        ? "♪"
-                        : trend.platform === "YouTube"
-                          ? "▶"
-                          : trend.platform === "X"
-                            ? "𝕏"
-                            : "◎"}{" "}
-                      {trend.platform}
-                    </span>
-                    <button
-                      className={`bookmark-button ${savedIdea ? "is-saved" : ""}`}
-                      aria-label={`${savedIdea ? "Unsave" : "Save"} ${trend.title}`}
-                      aria-pressed={savedIdea}
-                      onClick={() => toggleSave(trend)}
-                    >
-                      <Bookmark
-                        size={17}
-                        fill={savedIdea ? "currentColor" : "none"}
-                      />
-                    </button>
+          {view === "discover" && (
+            <section
+              id="ideas"
+              tabIndex={-1}
+              className="ideas-section"
+              aria-labelledby="ideas-heading"
+            >
+              <div className="section-heading">
+                <div>
+                  <div className="eyebrow section-eyebrow">
+                    YOUR DISCOVERY FEED
                   </div>
-                  <div className="card-content">
-                    <div className="card-kicker">
-                      <span>
-                        {categories
-                          .filter(
-                            (cat) =>
-                              cat.id !== "all" &&
-                              matchesCategory(trend, cat.id),
-                          )
-                          .map((cat) => cat.label)
-                          .join(" · ")}
-                      </span>
-                      <span
-                        className={`signal-badge ${
-                          trend.score >= 80
-                            ? "signal-strong"
-                            : trend.score >= 50
-                              ? "signal-medium"
-                              : "signal-weak"
-                        }`}
-                      >
-                        <Flame size={12} />
-                        {!trend.hasBaseline
-                          ? "First observation"
-                          : trend.score >= 80
-                            ? "Trending signal"
-                            : trend.score >= 50
-                              ? "Mid signal"
-                              : "Weak signal"}
-                      </span>
-                    </div>
-                    <h3>
+                  <h2 id="ideas-heading">
+                    Find something that feels like you.
+                  </h2>
+                  <p>
+                    Real posts. Visible activity. A fresh perspective for your
+                    business.
+                  </p>
+                </div>
+                <div className="collection-actions">
+                  <button
+                    className="collection-button collection-button-primary"
+                    onClick={() => runLiveScan()}
+                    disabled={scanning}
+                  >
+                    <RefreshCw
+                      size={14}
+                      className={scanning ? "spinning" : ""}
+                    />
+                    {scanning ? "Finding ideas…" : "Find fresh ideas"}
+                  </button>
+                </div>
+              </div>
+              <div className="filter-row">
+                <div className="category-list" aria-label="Filter by topic">
+                  {categories.map((cat) => {
+                    const isSelected =
+                      cat.id === "all"
+                        ? selectedCategories.length === 0
+                        : selectedCategories.includes(cat.id);
+                    return (
                       <button
-                        className="card-open"
-                        aria-haspopup="dialog"
-                        aria-label={`View details for ${trend.title}`}
-                        onClick={(event) =>
-                          openIdea(trend, event.currentTarget)
+                        key={cat.id}
+                        aria-pressed={isSelected}
+                        disabled={
+                          cat.id !== "all" &&
+                          !isSelected &&
+                          selectedCategories.length >= 4
                         }
+                        className={`category-button ${isSelected ? "category-active" : ""}`}
+                        onClick={() => toggleCategory(cat.id)}
                       >
-                        {trend.title}
+                        {cat.id === "all" ? (
+                          <Sparkles size={14} />
+                        ) : (
+                          isSelected && <Check size={14} />
+                        )}
+                        {cat.label}
                       </button>
-                    </h3>
-                    <PredictionViews trend={trend} compact />
-                    <div className="card-metrics">
-                      <span className={`growth-value ${percent !== null && percent < 0 ? "growth-negative" : ""}`}>
-                        <ArrowUpRight size={14} />
-                        {percent === null ? "First observation" : `${percent > 0 ? "+" : ""}${percent.toLocaleString()}% measured growth`}
-                      </span>
-                      <span>{refreshBatch && batchIds.has(trend.id) ? "Refresh batch" : "Stored"}</span>
-                    </div>
-                    <button className="card-action" aria-haspopup="dialog" onClick={(event) => openIdea(trend, event.currentTarget)}>
-                      View trend <ArrowUpRight size={17} />
+                    );
+                  })}
+                </div>
+                <div className="category-hint">
+                  <span>
+                    Select up to 4 categories. Videos must match every selected
+                    category.
+                  </span>
+                  <span>{selectedCategories.length}/4 selected</span>
+                </div>
+              </div>
+              <div className="collection-toolbar">
+                <label className="search-field">
+                  <Search size={16} />
+                  <input
+                    aria-label="Search ideas"
+                    placeholder="Find something for your business…"
+                    value={query}
+                    onChange={(event) => {
+                      setQuery(event.target.value);
+                      setVisibleCount(12);
+                    }}
+                  />
+                  {query && (
+                    <button
+                      aria-label="Clear search"
+                      onClick={() => setQuery("")}
+                    >
+                      <X size={14} />
                     </button>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-          {visible.length === 0 && (
-            <div className="empty-state">
-              <Bookmark size={30} strokeWidth={1.2} />
-              <h3>No matching ideas found.</h3>
-              <p>Try another topic.</p>
-              <button
-                className="primary-button"
-                onClick={() => {
-                  resetFilters();
-                }}
-              >
-                Explore all ideas <ArrowRight size={16} />
-              </button>
-            </div>
+                  )}
+                </label>
+                <div className="toolbar-selects">
+                  <FilterMenu
+                    label="Filter by platform"
+                    value={platform}
+                    options={[
+                      { value: "all", label: "All platforms" },
+                      { value: "TikTok", label: "TikTok" },
+                      { value: "Instagram", label: "Instagram" },
+                    ]}
+                    onChange={(value) => {
+                      setRefreshBatch(null);
+                      setPlatform(value);
+                      setVisibleCount(12);
+                    }}
+                  />
+                  <FilterMenu
+                    label="Sort ideas"
+                    value={sort}
+                    options={[
+                      { value: "growth", label: "View growth" },
+                      { value: "score", label: "Signal score" },
+                      { value: "views", label: "Most views" },
+                      { value: "recent", label: "Recently checked" },
+                    ]}
+                    onChange={setSort}
+                  />
+                </div>
+              </div>
+              <div className="collection-caption">
+                <span>
+                  {filtered.length} {filtered.length === 1 ? "idea" : "ideas"}{" "}
+                  to explore
+                </span>
+                <span>
+                  <ShieldCheck size={13} /> Source-verified collection
+                </span>
+              </div>
+              <div className="trend-grid">
+                {visible.map((trend) => {
+                  const savedIdea = saved.includes(trend.id);
+                  const percent = growth(trend);
+                  return (
+                    <article className="trend-card" key={trend.id}>
+                      <div className="card-image">
+                        <TrendArtwork
+                          trend={trend}
+                          onOpen={(button) => openIdea(trend, button)}
+                        />
+                        <span className="platform-tag">
+                          {trend.platform === "TikTok"
+                            ? "♪"
+                            : trend.platform === "YouTube"
+                              ? "▶"
+                              : trend.platform === "X"
+                                ? "𝕏"
+                                : "◎"}{" "}
+                          {trend.platform}
+                        </span>
+                        <button
+                          className={`bookmark-button ${savedIdea ? "is-saved" : ""}`}
+                          aria-label={`${savedIdea ? "Unsave" : "Save"} ${trend.title}`}
+                          aria-pressed={savedIdea}
+                          onClick={() => toggleSave(trend)}
+                        >
+                          <Bookmark
+                            size={17}
+                            fill={savedIdea ? "currentColor" : "none"}
+                          />
+                        </button>
+                      </div>
+                      <div className="card-content">
+                        <div className="card-kicker">
+                          <span>
+                            {categories
+                              .filter(
+                                (cat) =>
+                                  cat.id !== "all" &&
+                                  matchesCategory(trend, cat.id),
+                              )
+                              .map((cat) => cat.label)
+                              .join(" · ")}
+                          </span>
+                          <span
+                            className={`signal-badge ${
+                              trend.score >= 80
+                                ? "signal-strong"
+                                : trend.score >= 50
+                                  ? "signal-medium"
+                                  : "signal-weak"
+                            }`}
+                          >
+                            <Flame size={12} />
+                            {!trend.hasBaseline
+                              ? "First observation"
+                              : trend.score >= 80
+                                ? "Trending signal"
+                                : trend.score >= 50
+                                  ? "Mid signal"
+                                  : "Weak signal"}
+                          </span>
+                        </div>
+                        <h3>
+                          <button
+                            className="card-open"
+                            aria-haspopup="dialog"
+                            aria-label={`View details for ${trend.title}`}
+                            onClick={(event) =>
+                              openIdea(trend, event.currentTarget)
+                            }
+                          >
+                            {trend.title}
+                          </button>
+                        </h3>
+                        <PredictionViews trend={trend} compact />
+                        <div className="card-metrics">
+                          <span
+                            className={`growth-value ${percent !== null && percent < 0 ? "growth-negative" : ""}`}
+                          >
+                            <ArrowUpRight size={14} />
+                            {percent === null
+                              ? "First observation"
+                              : `${percent > 0 ? "+" : ""}${percent.toLocaleString()}% measured growth`}
+                          </span>
+                          <span>
+                            {refreshBatch && batchIds.has(trend.id)
+                              ? "Refresh batch"
+                              : "Stored"}
+                          </span>
+                        </div>
+                        <button
+                          className="card-action"
+                          aria-haspopup="dialog"
+                          onClick={(event) =>
+                            openIdea(trend, event.currentTarget)
+                          }
+                        >
+                          View trend <ArrowUpRight size={17} />
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+              {visible.length === 0 && (
+                <div className="empty-state">
+                  <span className="empty-icon">
+                    <Radar size={28} strokeWidth={1.3} />
+                  </span>
+                  <h3>
+                    {trends.length
+                      ? "Nothing here with those filters. Yet."
+                      : "A fresh space for your next discovery."}
+                  </h3>
+                  <p>
+                    {trends.length
+                      ? "Try a broader search or a different combination of categories."
+                      : connections?.ready
+                        ? "Choose a topic and find fresh ideas to build your collection."
+                        : "Live discovery is waiting for its connections. In the meantime, turn a starter format into your first post."}
+                  </p>
+                  <button
+                    className="primary-button"
+                    onClick={() => {
+                      if (trends.length) resetFilters();
+                      else navigate("settings");
+                    }}
+                  >
+                    {trends.length ? "Clear filters" : "View connections"}{" "}
+                    <ArrowRight size={16} />
+                  </button>
+                </div>
+              )}
+              {visible.length < filtered.length && (
+                <div className="load-more">
+                  <button
+                    className="outline-button"
+                    onClick={() => setVisibleCount((previous) => previous + 12)}
+                  >
+                    Show next {Math.min(12, filtered.length - visible.length)}{" "}
+                    ideas <ChevronDown size={15} />
+                  </button>
+                  <span>
+                    Showing {visible.length} of {filtered.length} ideas
+                  </span>
+                </div>
+              )}
+            </section>
           )}
-          {visible.length < filtered.length && (
-            <div className="load-more">
-              <button
-                className="outline-button"
-                onClick={() => setVisibleCount((previous) => previous + 12)}
-              >
-                Show next {Math.min(12, filtered.length - visible.length)} ideas{" "}
-                <ChevronDown size={15} />
-              </button>
-              <span>
-                Showing {visible.length} of {filtered.length} ideas
-              </span>
-            </div>
+          {(view === "saved" || view === "planner") && (
+            <label className="search-field workspace-search">
+              <Search size={16} />
+              <input
+                aria-label={
+                  view === "saved"
+                    ? "Search saved ideas"
+                    : "Search content plan"
+                }
+                value={workspaceQuery}
+                onChange={(event) => setWorkspaceQuery(event.target.value)}
+                placeholder={
+                  view === "saved"
+                    ? "Find a saved spark…"
+                    : "Find a post in your plan…"
+                }
+              />
+              {workspaceQuery && (
+                <button
+                  aria-label="Clear workspace search"
+                  onClick={() => setWorkspaceQuery("")}
+                >
+                  <X size={15} />
+                </button>
+              )}
+            </label>
           )}
-        </section>
-        <section className="closing-note">
-          <span className="closing-spark">✳</span>
-          <div>
-            <span className="eyebrow">YOUR BUSINESS. YOUR POINT OF VIEW.</span>
-            <h2>
-              You don’t need to follow every trend.
-              <br />
-              <i>Just find the one that feels like you.</i>
-            </h2>
-          </div>
-          <button className="closing-link" onClick={() => setHowOpen(true)}>
-            A little help getting started <ArrowUpRight size={18} />
-          </button>
-        </section>
-      </main>
-      <footer className="page-width site-footer">
-        <span className="footer-brand">pretrends.</span>
-        <span>A little ahead of the curve.</span>
-        <span>
-          Built for the next good idea <Sparkles size={13} />
-        </span>
-      </footer>
+          {view === "saved" && (
+            <SavedIdeas
+              bookmarks={workspace.data.bookmarks}
+              availableIds={new Set(trends.map((trend) => trend.id))}
+              query={workspaceQuery}
+              onCreate={createFromSaved}
+              onExplore={() => navigate("discover")}
+              onRemove={(id) =>
+                workspace.update((current) => ({
+                  ...current,
+                  bookmarks: current.bookmarks.filter((idea) => idea.id !== id),
+                }))
+              }
+            />
+          )}
+          {view === "planner" && (
+            <ContentPlanner
+              drafts={workspace.data.drafts}
+              onCreate={() => newDraft()}
+              onEdit={setEditing}
+              query={workspaceQuery}
+              onDelete={(id) =>
+                workspace.update((current) => ({
+                  ...current,
+                  drafts: current.drafts.filter((draft) => draft.id !== id),
+                }))
+              }
+              onUndo={(draft) =>
+                workspace.update((current) => ({
+                  ...current,
+                  drafts: [
+                    ...current.drafts.filter((item) => item.id !== draft.id),
+                    draft,
+                  ],
+                }))
+              }
+            />
+          )}
+          {view === "settings" && (
+            <WorkspaceSettings
+              data={workspace.data}
+              update={workspace.update}
+              connections={connections}
+              onCheck={() => void checkConnections()}
+            />
+          )}
+          {(view === "discover" ||
+            (view === "planner" && !workspace.data.drafts.length)) && (
+            <StarterLibrary onCreate={createFromTemplate} />
+          )}
+          <footer className="workspace-footer">
+            <span>Made for your next good idea.</span>
+            <span>
+              Less scrolling. More creating. <Sparkles size={13} />
+            </span>
+          </footer>
+        </main>
+      </div>
+      {editing && (
+        <DraftEditor
+          key={editing.id + editing.updatedAt}
+          draft={editing}
+          onSave={saveDraft}
+          onClose={() => setEditing(null)}
+        />
+      )}
 
       <Dialog open={howOpen} onOpenChange={setHowOpen}>
         <DialogContent className="idea-dialog how-dialog">
@@ -703,7 +1267,8 @@ export default function TrendExplorer({
           </ol>
           <div className="honest-note">
             Browse saved posts or find fresh trends. Live posts include AI
-            guidance when available. Saved ideas stay for this session.
+            guidance when available. Saved ideas and your content plan stay in
+            this browser. Back them up in workspace settings.
           </div>
           <a
             className="research-link"
@@ -728,8 +1293,10 @@ export default function TrendExplorer({
           overlayClassName="trend-detail-overlay"
           onCloseAutoFocus={(event) => {
             event.preventDefault();
-            if (detailTrigger.current?.isConnected) detailTrigger.current.focus({ preventScroll: true });
-            else document.getElementById("ideas")?.focus({ preventScroll: true });
+            if (detailTrigger.current?.isConnected)
+              detailTrigger.current.focus({ preventScroll: true });
+            else
+              document.getElementById("ideas")?.focus({ preventScroll: true });
           }}
         >
           {selected && (
@@ -761,36 +1328,59 @@ export default function TrendExplorer({
                   </DialogDescription>
                 </header>
                 <section className="views-panel" aria-label="Video views">
-                  {!selectedAvailable && <p role="status">This post is no longer available in the current results. You can still copy your brief.</p>}
-                  {selectedAvailable && <>
-                  <PredictionViews trend={selected} />
-                  <p className="views-checked">
-                    Last checked: {new Date(selected.sourceVerifiedAt).toLocaleString()}
-                  </p>
-                  </>}
+                  {!selectedAvailable && (
+                    <p role="status">
+                      This post is no longer available in the current results.
+                      You can still copy your brief.
+                    </p>
+                  )}
+                  {selectedAvailable && (
+                    <>
+                      <PredictionViews trend={selected} />
+                      <p className="views-checked">
+                        Last checked:{" "}
+                        {new Date(selected.sourceVerifiedAt).toLocaleString()}
+                      </p>
+                    </>
+                  )}
                   {selected.url && (
-                    <a className="detail-video-link" href={selected.url} target="_blank" rel="noreferrer">
+                    <a
+                      className="detail-video-link"
+                      href={selected.url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
                       Watch original video <ExternalLink size={15} />
                     </a>
                   )}
                 </section>
                 <section className="detail-explanation">
                   <h3>Why this trend matters</h3>
-                  <p>{cleanTrendMatterReason(selected.reason, selected.categoryEvidence)}</p>
+                  <p>
+                    {cleanTrendMatterReason(
+                      selected.reason,
+                      selected.categoryEvidence,
+                    )}
+                  </p>
                   <div className="growth-reasons">
                     <h4 className="growth-reasons-title">
                       <TrendingUp size={16} />
                       Why this video is projected to grow
                     </h4>
                     <ul className="growth-reasons-list">
-                      {trendGrowthReasons(selected, trends).map((point, index) => (
-                        <li key={index} className="growth-reason-item">
-                          <span className="growth-reason-bullet" aria-hidden="true" />
-                          <div className="growth-reason-text">
-                            <strong>{point.title}:</strong> {point.detail}
-                          </div>
-                        </li>
-                      ))}
+                      {trendGrowthReasons(selected, trends).map(
+                        (point, index) => (
+                          <li key={index} className="growth-reason-item">
+                            <span
+                              className="growth-reason-bullet"
+                              aria-hidden="true"
+                            />
+                            <div className="growth-reason-text">
+                              <strong>{point.title}:</strong> {point.detail}
+                            </div>
+                          </li>
+                        ),
+                      )}
                     </ul>
                   </div>
                 </section>
@@ -847,9 +1437,6 @@ export default function TrendExplorer({
                         maxLength={80}
                         onChange={(event) => {
                           setBusiness(event.target.value);
-                          setCaption(
-                            starterIdea(selected, event.target.value).hook,
-                          );
                           setCopied(false);
                         }}
                       />
@@ -859,15 +1446,42 @@ export default function TrendExplorer({
                       <textarea
                         value={caption}
                         rows={3}
+                        maxLength={10000}
                         onChange={(event) => {
-                          setCaption(event.target.value);
-                          setCopied(false);
+                          editCaption(event.target.value);
                         }}
                       />
                     </label>
+                    <button
+                      className="text-button"
+                      onClick={() =>
+                        editCaption(starterIdea(selected, business).hook)
+                      }
+                    >
+                      Use starter hook for {business.trim() || "my business"}{" "}
+                      <Sparkles size={13} />
+                    </button>
                   </div>
                 </details>
                 <div className="brief-actions">
+                  <button
+                    className="outline-button"
+                    onClick={() => {
+                      newDraft({
+                        title: selected.title,
+                        caption,
+                        notes: starterIdea(selected, business)
+                          .steps.map((step, i) => `${i + 1}. ${step}`)
+                          .join("\n"),
+                        sourceId: selected.id,
+                        sourceUrl: selected.url || "",
+                        platform: selected.platform,
+                      });
+                      setSelected(null);
+                    }}
+                  >
+                    <CalendarDays size={15} /> Add to planner
+                  </button>
                   <button
                     className="outline-button"
                     onClick={() => toggleSave(selected)}

@@ -4,6 +4,13 @@
 
 @custom-variant dark (&:is(.dark *));
 
+.app-loading { width: min(1040px, calc(100% - 48px)); margin: 40px auto; color: #887198; }
+.loading-brand { display: block; font-size: 26px; font-weight: 650; letter-spacing: -1px; margin-bottom: 38px; color: #4a3c56; }
+.loading-banner { height: 260px; background: #f0eaf3; border-radius: 14px; }
+.app-loading p { margin: 25px 0; font-size: 13px; }
+.loading-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.loading-cards span { height: 140px; background: #f4eff6; border-radius: 10px; }
+
 @layer base {
   :root {
     --background: #f8fafc;
